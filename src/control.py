@@ -95,12 +95,10 @@ def do_random_action():
     keys = [ControlKey.LEFT, ControlKey.RIGHT, ControlKey.DOWN]  # Keys to act on
     actions_list = [tap, hold, unhold, tap_hold, do_nothing]  # Action functions
 
-    while True:
-        # Randomly choose an action and a key (if applicable)
-        action = random.choice(actions_list)
+    action = random.choice(actions_list)
 
-        if action in [tap, hold, unhold, tap_hold]:
-            key = random.choice(keys)  # Select a random key
-            action(key)  # Call the action with the key
-        else:
-            action()  # Call actions like do_nothing with no arguments
+    if action in [tap, hold, unhold, tap_hold]:
+        key = random.choice(keys)  # Select a random key
+        action(key)  # Call the action with the key
+    else:
+        action()  # Call actions like do_nothing with no arguments
