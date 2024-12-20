@@ -1,108 +1,80 @@
+import time
 from enum import Enum
 
 import pydirectinput
-import time
-import win32gui
-
-
-def set_window_size(window_title, x, y, width, height):
-    """
-    Sets the size and position of a window based on its title.
-
-    Parameters:
-    window_title (str): The title of the target window.
-    x (int): The x-coordinate of the top-left corner.
-    y (int): The y-coordinate of the top-left corner.
-    width (int): The width of the window.
-    height (int): The height of the window.
-    """
-    # Find the window handle (HWND) by its title
-    hwnd = win32gui.FindWindow(None, window_title)
-
-    if hwnd:
-        # Use MoveWindow to set the window's position and size
-        win32gui.MoveWindow(hwnd, x, y, width, height, True)
-        print(f"Set window '{window_title}' to position ({x}, {y}) with size ({width}x{height}).")
-    else:
-        print(f"Window with title '{window_title}' not found.")
-
-
-def bring_window_to_foreground(window_title):
-    # Find the window handle (HWND) by its title
-    hwnd = win32gui.FindWindow(None, window_title)
-
-    if hwnd:
-        # Bring the window to the foreground
-        win32gui.SetForegroundWindow(hwnd)
-
-        print(f"Window '{window_title}' is now in the foreground.")
-    else:
-        print(f"Window with title '{window_title}' not found.")
 
 SIMPLE_CLICK_DURATION = 0.1
 
 
-def use_key(key, duration=SIMPLE_CLICK_DURATION):
-    pydirectinput.keyDown(key)  # Hold the key
-    time.sleep(duration)  # Hold the key for the specified duration
-    pydirectinput.keyUp(key)  # Release the key after holding
+class ControlKey(Enum):
+    LEFT = "left"
+    RIGHT = "right"
+    DOWN = "down"
 
 
-def hold_key(key, duration=SIMPLE_CLICK_DURATION, is_double_press=False):
+def tap(key: ControlKey):
     """
-
-    :param key:
-    :param duration:
-    :param is_double_press:
-    :return:
+    For example: to drop money
     """
-
-    if is_double_press:
-        use_key(key)
-        time.sleep(SIMPLE_CLICK_DURATION) # To imitate user action
-
-    use_key(key, duration)
+    pydirectinput.keyDown(key.value)
+    time.sleep(SIMPLE_CLICK_DURATION)
+    pydirectinput.keyUp(key.value)
 
 
-class MoveDirection(Enum):
-   LEFT = 'left'
-   RIGTH = 'right'
-   DOWN = 'down'
+def hold(key: ControlKey):
+    """
+    For example: to walk, to pay money
+    """
+    pydirectinput.keyDown(key.value)
 
 
-def walk(direction: MoveDirection, duration):
-    use_key(direction.value, duration)
+def unhold(key: ControlKey):
+    pydirectinput.keyUp(key.value)
 
-def run(direction: MoveDirection, duration):
-    hold_key(direction.value, duration, is_double_press=True)
 
-def drop_coins(amount:int):
-    for i in range(amount):
-        use_key(MoveDirection.DOWN.value)
-        time.sleep(SIMPLE_CLICK_DURATION) # To imitate user action
+def tap_hold(key: ControlKey):
+    """
+    For example: to run
+    """
+    tap(key)
+    hold(key)
 
-def pay(amount: int):
-    hold_key(MoveDirection.DOWN.value, duration=0.3 * amount)
 
-def do_nothing(duration = 1):
-    time.sleep(duration)
+def do_nothing():
+    pass
+
 
 def test_movements():
-    walk(MoveDirection.LEFT, duration=1)
-    run(MoveDirection.RIGTH, duration=0.5)
+    # Move left
+    print("Move left")
+    hold(ControlKey.LEFT)
+    time.sleep(2)
+    unhold(ControlKey.LEFT)
 
-    # do_nothing()
-    # drop_coins(0)
-    # do_nothing()
+    # Run right
+    print("Run right")
+    tap_hold(ControlKey.RIGHT)
+    time.sleep(2)
+    unhold(ControlKey.RIGHT)
 
-    pay(5)
+    # Drop money
+    print("Drop money")
+    time.sleep(2)
+    tap(ControlKey.DOWN)
+    time.sleep(2)
 
+    # Walk left and drop money
+    print("Drop money")
+    hold(ControlKey.LEFT)
+    time.sleep(0.1)
+    tap(ControlKey.DOWN)
+    time.sleep(0.5)
+    tap(ControlKey.DOWN)
+    time.sleep(1)
+    unhold(ControlKey.LEFT)
 
-
-
-# Example usage
-game_window_title = "Kingdom"  # Replace with your game window title
-set_window_size(game_window_title, x=100, y=100, width=640, height=360)
-bring_window_to_foreground(game_window_title)
-test_movements()
-
+    # Pay
+    print("Pay money")
+    hold(ControlKey.DOWN)
+    time.sleep(0.3 * 5)
+    unhold(ControlKey.DOWN)
