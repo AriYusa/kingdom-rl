@@ -8,43 +8,68 @@ from src.logging_config import logger
 
 SIMPLE_CLICK_DURATION = 0.1
 
-
+# TODO research more about actions in continuous-time envs
 class ControlKey(Enum):
     LEFT = "left"
     RIGHT = "right"
     DOWN = "down"
+    SHIFT = "shift"
+
+def unhold_all():
+    pydirectinput.keyUp(ControlKey.LEFT.value)
+    pydirectinput.keyUp(ControlKey.RIGHT.value)
+    pydirectinput.keyUp(ControlKey.DOWN.value)
+    pydirectinput.keyUp(ControlKey.SHIFT.value)
+
+def walk_left():
+    logger.debug(f"Performing walk_left")
+
+    unhold_all()
+
+    # perform
+    pydirectinput.keyDown(ControlKey.LEFT.value)
+
+def walk_right():
+    logger.debug(f"Performing walk_right")
+
+    unhold_all()
+
+    pydirectinput.keyDown(ControlKey.RIGHT.value)
+
+def run_left():
+    logger.debug(f"Performing run_left")
+
+    unhold_all()
+
+    pydirectinput.keyDown(ControlKey.LEFT.value)
+    pydirectinput.keyDown(ControlKey.SHIFT.value)
+
+def run_right():
+    logger.debug(f"Performing run_right")
+
+    unhold_all()
+
+    pydirectinput.keyDown(ControlKey.RIGHT.value)
+    pydirectinput.keyDown(ControlKey.SHIFT.value)
 
 
-def tap(key: ControlKey):
-    """
-    For example: to drop money
-    """
-    logger.debug(f"Performing tap on {key.name}")
-    pydirectinput.keyDown(key.value)
+def drop_coin():
+    # drop can be done while walking/running
+
+    logger.debug(f"Performing drop_coin")
+    pydirectinput.keyDown(ControlKey.DOWN.value)
     time.sleep(SIMPLE_CLICK_DURATION)
-    pydirectinput.keyUp(key.value)
+    pydirectinput.keyUp(ControlKey.DOWN.value)
 
 
-def hold(key: ControlKey):
-    """
-    For example: to walk, to pay money
-    """
-    logger.debug(f"Performing hold on {key.name}")
-    pydirectinput.keyDown(key.value)
+def pay():
+    # Technically speaking, payment also can be done while walking/running,
+    # but it rarely used that way. To keep it simple, lets pay only while standing
+    logger.debug(f"Performing pay")
 
+    unhold_all()
 
-def unhold(key: ControlKey):
-    logger.debug(f"Performing unhold on {key.name}")
-    pydirectinput.keyUp(key.value)
-
-
-def tap_hold(key: ControlKey):
-    """
-    For example: to run
-    """
-    logger.debug(f"Performing tap_hold on {key.name}")
-    tap(key)
-    hold(key)
+    pydirectinput.keyDown(ControlKey.DOWN.value)
 
 
 def do_nothing():
@@ -52,53 +77,17 @@ def do_nothing():
     pass
 
 
-actions = [hold, unhold, tap, tap_hold, do_nothing]
-
-
-def test_actions():
-    # Move left
-    logger.debug("Move left")
-    hold(ControlKey.LEFT)
-    time.sleep(2)
-    unhold(ControlKey.LEFT)
-
-    # Run right
-    logger.debug("Run right")
-    tap_hold(ControlKey.RIGHT)
-    time.sleep(2)
-    unhold(ControlKey.RIGHT)
-
-    # Drop money
-    logger.debug("Drop money")
-    time.sleep(2)
-    tap(ControlKey.DOWN)
-    time.sleep(2)
-
-    # Walk left and drop money
-    logger.debug("Drop money")
-    hold(ControlKey.LEFT)
-    time.sleep(0.1)
-    tap(ControlKey.DOWN)
-    time.sleep(0.5)
-    tap(ControlKey.DOWN)
-    time.sleep(1)
-    unhold(ControlKey.LEFT)
-
-    # Pay
-    logger.debug("Pay money")
-    hold(ControlKey.DOWN)
-    time.sleep(0.3 * 5)
-    unhold(ControlKey.DOWN)
-
-
 def do_random_action():
-    keys = [ControlKey.LEFT, ControlKey.RIGHT, ControlKey.DOWN]  # Keys to act on
-    actions_list = [tap, hold, unhold, tap_hold, do_nothing]  # Action functions
+    actions_list = [
+        walk_left,
+        walk_right,
+        run_left,
+        run_right,
+        pay,
+        drop_coin,
+        unhold_all,
+        do_nothing
+    ]  # Action functions
 
     action = random.choice(actions_list)
-
-    if action in [tap, hold, unhold, tap_hold]:
-        key = random.choice(keys)  # Select a random key
-        action(key)  # Call the action with the key
-    else:
-        action()  # Call actions like do_nothing with no arguments
+    action()
