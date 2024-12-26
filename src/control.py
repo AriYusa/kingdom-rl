@@ -1,25 +1,24 @@
 import random
 import time
 from enum import Enum
+from time import sleep
 
 import pydirectinput
 
 from src.logging_config import logger
 
-SIMPLE_CLICK_DURATION = 0.1
+SIMPLE_CLICK_DURATION = 0.05
 
 # TODO research more about actions in continuous-time envs
 class ControlKey(Enum):
     LEFT = "left"
     RIGHT = "right"
     DOWN = "down"
-    SHIFT = "shift"
 
 def unhold_all():
     pydirectinput.keyUp(ControlKey.LEFT.value)
     pydirectinput.keyUp(ControlKey.RIGHT.value)
     pydirectinput.keyUp(ControlKey.DOWN.value)
-    pydirectinput.keyUp(ControlKey.SHIFT.value)
 
 def walk_left():
     logger.debug(f"Performing walk_left")
@@ -42,7 +41,10 @@ def run_left():
     unhold_all()
 
     pydirectinput.keyDown(ControlKey.LEFT.value)
-    pydirectinput.keyDown(ControlKey.SHIFT.value)
+    pydirectinput.keyUp(ControlKey.LEFT.value)
+    sleep(SIMPLE_CLICK_DURATION)
+
+    pydirectinput.keyDown(ControlKey.LEFT.value)
 
 def run_right():
     logger.debug(f"Performing run_right")
@@ -50,7 +52,10 @@ def run_right():
     unhold_all()
 
     pydirectinput.keyDown(ControlKey.RIGHT.value)
-    pydirectinput.keyDown(ControlKey.SHIFT.value)
+    pydirectinput.keyUp(ControlKey.RIGHT.value)
+    sleep(SIMPLE_CLICK_DURATION)
+
+    pydirectinput.keyDown(ControlKey.RIGHT.value)
 
 
 def drop_coin():
@@ -58,7 +63,6 @@ def drop_coin():
 
     logger.debug(f"Performing drop_coin")
     pydirectinput.keyDown(ControlKey.DOWN.value)
-    time.sleep(SIMPLE_CLICK_DURATION)
     pydirectinput.keyUp(ControlKey.DOWN.value)
 
 
