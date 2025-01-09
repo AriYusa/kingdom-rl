@@ -67,8 +67,6 @@ def drop_coin():
 
 
 def pay():
-    # Technically speaking, payment also can be done while walking/running,
-    # but it rarely used that way. To keep it simple, lets pay only while standing
     logger.debug(f"Performing pay")
 
     unhold_all()

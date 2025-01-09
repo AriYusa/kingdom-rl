@@ -15,6 +15,7 @@ pygetwindow = "^0.0.9"
 pyautogui = "^0.9.54"
 pillow = "^11.0.0"
 keyboard = "^0.13.5"
+pynput = "^1.7.7"
 
 
 [build-system]

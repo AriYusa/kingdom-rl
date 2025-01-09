@@ -9,7 +9,7 @@ import keyboard
 import pygetwindow
 from pygetwindow import Win32Window
 
-from src.control import drop_coin, pay, walk_left, walk_right, do_nothing, run_right, run_left, unhold_all
+from src.control import drop_coin, pay, unhold_all, walk_left, walk_right, do_nothing, run_right, run_left
 from src.logging_config import logger
 
 
