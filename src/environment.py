@@ -1,11 +1,9 @@
-import json
 import os
 import time
 from datetime import datetime
 
 from PIL import Image
 import pyautogui
-import keyboard
 import pygetwindow
 from pygetwindow import Win32Window
 
@@ -70,6 +68,7 @@ class Window:
 
 class GameEnvironment:
     def __init__(self, window_name:str = "Kingdom"):
+        self.start_game()
         self.window = Window(window_name)
         self.window.prepare_window()
 
@@ -83,6 +82,12 @@ class GameEnvironment:
         "0": unhold_all,
         "-": do_nothing,
     }
+
+    @staticmethod
+    def start_game():
+        os.startfile(r"D:\Games\KingdomNewLands\Kingdom.exe")
+        time.sleep(10)  # Allow time for the game to open
+        logger.debug("Start game")
 
     def postprocess_image(self, screenshot: Image.Image):
         inner_bounds = (
@@ -113,6 +118,7 @@ class GameEnvironment:
         """
         action_func = self.button_actions.get(str(action), do_nothing)
         action_func()
+        time.sleep(0.1)
         next_state = self.get_state()
         return next_state
 
@@ -127,103 +133,32 @@ class GameEnvironment:
         # Replace the save file
         save_path = os.path.expanduser("~\\AppData\\LocalLow\\noio\\Kingdom\\storage_v34_AUTO.dat")
         initial_state_path = os.path.expanduser("~\\AppData\\LocalLow\\noio\\Kingdom\\initial_state.dat")
-        os.remove(save_path)
-        os.rename(initial_state_path, save_path)
+        with open(initial_state_path, "rb") as src, open(save_path, "wb") as dst:
+            dst.write(src.read())
 
         # Reopen the game
-        os.startfile("D:\Games\KingdomNewLands\Kingdom.exe") 
-        time.sleep(5)  # Allow time for the game to open
+        self.start_game()
 
         # Prepare the window again
         self.window.prepare_window()
         initial_state = self.get_state()
         return initial_state
 
+# env = GameEnvironment()
 
-class Run:
-    max_pause_sec = 1
-    run_id: str
-    output_dir: str
-    action_log: dict
-    environment: GameEnvironment
-
-    def __init__(self, environment: GameEnvironment):
-        self.environment = environment
-
-        self.run_id = time.strftime("%Y%m%d_%H%M%S")
-        self.output_dir = f"../logs/{self.run_id}"
-        os.makedirs(os.path.join(self.output_dir, "screenshots"))
-
-        self.action_log = {}
-
-    def safe_action_log(self):
-        log_path = os.path.join(self.output_dir, "action_log.json")
-        with open(log_path, "w") as f:
-            json.dump(self.action_log, f)
-        logger.debug("Action sequence saved")
-
-    def save_frame(self, state_id: int, frame: Image.Image):
-        logger.debug("Saving screenshot")
-
-        file_path = os.path.join(self.output_dir, "screenshots", f"{state_id}.png")
-        logger.debug(file_path)
-        frame.save(file_path)
-
-    def capture(self):
-        """
-        Control the character and capture screenshots simultaneously.
-        """
-
-        # just in case reset
-        self.environment.window.prepare_window()
-
-        logger.info("Start capture")
-        saving_timestamp = datetime.now()
-
-        try:
-            while True:
-                # чтобы мой мозг не нагружать буду играть не по реале, а прокси-действиями
-                # потому что ч хз нужно ли логировтаь стейт, когда я отпускаю кнопку?
-                # Check for button presses
-                pressed_key = keyboard.read_key()
-                logger.debug(f"Pressed {pressed_key}")
-
-                # Check for "Q" key press to save log and exit
-                if pressed_key == "q":
-                    unhold_all()
-                    self.safe_action_log()
-                    break
-
-                # Make screenshot if action from action space is done
-                action = self.environment.button_actions.get(pressed_key)
-                if action is not None:
-                    saving_timestamp = self.log_and_perform_action(action)
-                # TODO fix. this part is never executed since keyboard.read_key() is blocking
-                elif (datetime.now() - saving_timestamp).seconds > self.max_pause_sec:
-                    action = do_nothing
-                    saving_timestamp = self.log_and_perform_action(action)
-                else:
-                    time.sleep(0.1)
-
-        except Exception as e:
-            self.safe_action_log()
-            raise e
-
-
-    def log_and_perform_action(self, action: callable) -> datetime:
-        saving_timestamp = datetime.now()
-        state_id = self.environment.get_state_id(saving_timestamp)
-
-        # Log state just before action
-        state_image = self.environment.get_state()
-        self.save_frame(state_id, state_image)
-
-        # Log action
-        self.action_log[state_id] = action.__name__
-        # Perform an action
-        action()
-        return saving_timestamp
-
-env = GameEnvironment()
-run = Run(env)
-run.capture()
+# next_frame = env.step(1)
+# print(next_frame)
+# next_frame.save("step_1.png")
+# time.sleep(3)
+#
+# frame = env.reset()
+# print(frame)
+# frame.save("initial_state.png")
+#
+# next_frame = env.step(1)
+# print(next_frame)
+# next_frame.save("step_1.png")
+#
+# time.sleep(3)
+# next_frame = env.step(9)
+# next_frame.save("step_9.png")

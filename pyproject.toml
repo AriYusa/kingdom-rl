@@ -16,7 +16,15 @@ pyautogui = "^0.9.54"
 pillow = "^11.0.0"
 keyboard = "^0.13.5"
 pynput = "^1.7.7"
+torch = {version = "^2.5.1+cu124", source = "pytorch-gpu-src"}
+torchvision = {version = "^0.20.1+cu124", source = "pytorch-gpu-src"}
+torchaudio = {version = "^2.5.1+cu124", source = "pytorch-gpu-src"}
+wandb = "^0.19.4"
 
+[[tool.poetry.source]]
+name = "pytorch-gpu-src"
+url = "https://download.pytorch.org/whl/cu124"
+priority = "explicit"
 
 [build-system]
 requires = ["poetry-core"]
