@@ -1,13 +1,14 @@
 import os
 import time
 from datetime import datetime
+from typing import Optional
 
 from PIL import Image
 import pyautogui
 import pygetwindow
 from pygetwindow import Win32Window
 
-from src.control import drop_coin, pay, unhold_all, walk_left, walk_right, do_nothing, run_right, run_left
+from src.control import drop_coin, pay, unhold_all, walk_left, walk_right, do_nothing, run_right, run_left, un_pause
 from src.logging_config import logger
 
 
@@ -143,6 +144,12 @@ class GameEnvironment:
         self.window.prepare_window()
         initial_state = self.get_state()
         return initial_state
+
+    @staticmethod
+    def un_pause(sleep: Optional[int] = None):
+        un_pause()
+        if sleep:
+            time.sleep(sleep)
 
 # env = GameEnvironment()
 

@@ -9,10 +9,13 @@ from torch.distributions import Categorical
 import numpy as np
 import wandb
 from torchvision.transforms import transforms
-from typing import List
+from typing import List, Tuple
 from PIL import Image
 from src.environment import GameEnvironment
 from src.logging_config import logger
+
+# Get the directory of the current script (model.py)
+script_dir = os.path.dirname(os.path.abspath(__file__))
 
 # Initialize Weights & Biases
 wandb.init(
@@ -54,7 +57,7 @@ class Policy(nn.Module):
             nn.Flatten(),
         )
         self.flatten_size = calculate_flatten_size(input_shape, self.cnn.to(device))
-        logger.debug(f"Policy flatten_size: {self.flatten_size}")
+        logger.info(f"Policy flatten_size: {self.flatten_size}")
 
         self.fc = nn.Sequential(
             nn.Linear(self.flatten_size, 128),
@@ -85,7 +88,7 @@ class Discriminator(nn.Module):
             nn.Flatten(),
         )
         self.flatten_size = calculate_flatten_size(input_shape, self.cnn.to(device))
-        logger.debug(f"Discriminator flatten_size {self.flatten_size}")
+        logger.info(f"Discriminator flatten_size {self.flatten_size}")
         self.fc = nn.Sequential(
             nn.Linear(self.flatten_size, 1),
             nn.Sigmoid()
@@ -112,14 +115,14 @@ class GAIfO:
         wandb.watch(self.policy, log="all", log_freq=model_config.log_freq)
         wandb.watch(self.discriminator, log="all", log_freq=model_config.log_freq)
 
-    def get_action(self, state: torch.Tensor):
+    def get_action(self, state: torch.Tensor) -> Tuple[int, float]:
         state = state.unsqueeze(0).to(device)
         logits = self.policy(state)
         action_dist = Categorical(logits=logits)
         action = action_dist.sample()
-        return action.item(), action_dist.log_prob(action).detach()
+        return action.item(), action_dist.log_prob(action).detach().item()
 
-    def compute_returns(self, rewards):
+    def compute_returns(self, rewards) -> np.ndarray:
         returns = []
         running_return = 0
         for r in reversed(rewards):
@@ -128,11 +131,11 @@ class GAIfO:
         returns = np.array(returns)
         return (returns - returns.mean()) / (returns.std() + 1e-8)
 
-    def update_discriminator(self, agent_transitions: List[torch.Tensor], expert_transitions: List[torch.Tensor]):
-        agent_states = torch.FloatTensor(agent_transitions).to(device)
-        expert_states = torch.FloatTensor(expert_transitions).to(device)
-        agent_preds = self.discriminator(agent_states)
-        expert_preds = self.discriminator(expert_states)
+    def update_discriminator(self, agent_transitions: torch.Tensor, expert_transitions: torch.Tensor):
+        agent_transitions = agent_transitions.float().to(device)
+        expert_transitions = expert_transitions.float().to(device)
+        agent_preds = self.discriminator(agent_transitions)
+        expert_preds = self.discriminator(expert_transitions)
 
         disc_loss = -(torch.log(expert_preds + 1e-8).mean() +
                       torch.log(1 - agent_preds + 1e-8).mean())
@@ -145,16 +148,18 @@ class GAIfO:
         wandb.log({"Discriminator Loss": disc_loss.item()})
         return disc_loss.item()
 
-    def update_policy(self, states, actions, old_log_probs, returns):
-        states = torch.FloatTensor(states).to(device)
-        actions = torch.LongTensor(actions).to(device)
+    def update_policy(self, states: List[torch.Tensor], actions: List[int], old_log_probs: List[float], returns: np.ndarray):
+        states = torch.stack(states).to(device)
+        actions = torch.IntTensor(actions).to(device)
         old_log_probs = torch.FloatTensor(old_log_probs).to(device)
         returns = torch.FloatTensor(returns).to(device)
+
         policy_loss = 0
         for _ in range(model_config.policy_epochs):
             action_logits = self.policy(states)
             dist = Categorical(logits=action_logits)
             curr_log_probs = dist.log_prob(actions)
+            logger.debug(f"prob shapes: curr_log_probs {curr_log_probs.shape}, old_log_probs {old_log_probs.shape}")
             ratios = torch.exp(curr_log_probs - old_log_probs)
             surr1 = ratios * returns
             surr2 = torch.clamp(ratios, 1 - self.epsilon, 1 + self.epsilon) * returns
@@ -165,6 +170,7 @@ class GAIfO:
 
         # Log Policy Loss
         wandb.log({"Policy Loss": policy_loss.item()})
+        logger.debug(f'Policy loss {policy_loss.item()}' )
 
 def preprocess_frames(frames: List[Image]) -> torch.Tensor:
     transform = transforms.Compose([
@@ -177,12 +183,15 @@ def preprocess_frames(frames: List[Image]) -> torch.Tensor:
 
 def train_gaifo(env: GameEnvironment, agent: GAIfO):
     for episode in range(model_config.n_episodes):
+        logger.debug(f"EPISODE {episode}")
         start_frame = env.reset()
         frame_stack = [start_frame for _ in range(model_config.seq_length)]
         state = preprocess_frames(frame_stack)
         states, actions, rewards = [state], [], []
         old_log_probs = []
-        for _ in range(model_config.episode_length):
+
+        for i in range(model_config.episode_length):
+            logger.debug(f"STEP {i}")
             action, log_prob = agent.get_action(state)
             next_frame = env.step(action)
             frame_stack.append(next_frame)
@@ -195,11 +204,13 @@ def train_gaifo(env: GameEnvironment, agent: GAIfO):
             rewards.append(reward)
             old_log_probs.append(log_prob)  # for PPO
 
-            state = next_state 
+            state = next_state
+
+        env.un_pause(sleep=1) # pause
 
         # After the episode is finished, we update the discriminator
         batch_expert = sample_expert_states(batch_size=model_config.episode_length, seq_length=model_config.seq_length)
-        disc_loss = agent.update_discriminator(agent_transitions=states[1:], expert_transitions=batch_expert)
+        disc_loss = agent.update_discriminator(agent_transitions=torch.stack(states[1:]), expert_transitions=batch_expert)
 
         #  Compute the cumulative discounted rewards for the episode
         returns = agent.compute_returns(rewards)
@@ -209,10 +220,9 @@ def train_gaifo(env: GameEnvironment, agent: GAIfO):
 
         # Print the loss every 10 episodes to monitor the training progress
         wandb.log({"Episode": episode, "Cumulative Reward": sum(rewards), "Discriminator Loss": disc_loss})
-        if episode % 10 == 0:
-            print(f"Episode {episode}, Reward: {sum(rewards)}, Disc Loss: {disc_loss:.4f}")
+        logger.info(f"Episode {episode}, Reward: {sum(rewards)}, Disc Loss: {disc_loss:.4f}")
 
-def sample_expert_states(batch_size, seq_length):
+def sample_expert_states(batch_size, seq_length) -> torch.Tensor:
     """
     Load and preprocess expert trajectories for training.
 
@@ -223,7 +233,8 @@ def sample_expert_states(batch_size, seq_length):
     Returns:
         A batch of preprocessed sequences as a tensor of shape (batch_size, seq_length, h, w).
     """
-    expert_observations_dir = "~/expert_observations"
+    expert_observations_dir = os.path.join(script_dir, "../expert_observations")
+    expert_observations_dir = os.path.abspath(expert_observations_dir)
     all_episodes = os.listdir(expert_observations_dir)  # List all episodes in the directory
     if not all_episodes:
         raise ValueError("No expert trajectories found in the specified directory.")
@@ -241,11 +252,14 @@ def sample_expert_states(batch_size, seq_length):
         frames = [Image.open(os.path.join(episode_path, frame_files[idx])) for idx in range(start_idx, start_idx + seq_length)]
         preprocessed_sequence = preprocess_frames(frames)
         batch.append(preprocessed_sequence)
-    return batch
+    return torch.stack(batch)
 
 
+env = GameEnvironment()
 model = GAIfO(model_config, action_dim=8)
-time.sleep(20)
+time.sleep(10)
+train_gaifo(env, model)
+
 # policy = Policy(input_shape=(3, model_config.img_height, model_config.img_width), action_dim=8).to(device)
 # print(policy)
 

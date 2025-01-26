@@ -14,6 +14,7 @@ class ControlKey(Enum):
     LEFT = "left"
     RIGHT = "right"
     DOWN = "down"
+    ESCAPE = "esc"
 
 def unhold_all():
     pydirectinput.keyUp(ControlKey.LEFT.value)
@@ -93,3 +94,7 @@ def do_random_action():
 
     action = random.choice(actions_list)
     action()
+
+def un_pause():
+    pydirectinput.keyDown(ControlKey.ESCAPE.value)
+    pydirectinput.keyUp(ControlKey.ESCAPE.value)

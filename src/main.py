@@ -48,7 +48,8 @@ class Window:
         # Resize and position the window
         window.resizeTo(x // 2, y // 2)  # Half of the screen
         window.moveTo(0, 0)  # Move to top-left corner
-        window.activate()
+        if not window.isActive:
+            window.activate()
         time.sleep(1)  # Allow time for the window to adjust
 
         # Obtain the window's geometry
@@ -73,7 +74,7 @@ class GameEnvironment:
         self.window = Window(window_name)
         self.window.prepare_window()
 
-    button_actions = {
+    key_button_actions = {
         "1": run_left,
         "2": walk_left,
         "3": walk_right,
@@ -82,6 +83,17 @@ class GameEnvironment:
         "9": drop_coin,
         "0": unhold_all,
         "-": do_nothing,
+    }
+
+    id2action = {
+        1: run_left,
+        2: walk_left,
+        3: walk_right,
+        4: run_right,
+        5: pay,
+        6: drop_coin,
+        7: unhold_all,
+        8: do_nothing,
     }
 
     def postprocess_image(self, screenshot: Image.Image):
@@ -107,11 +119,11 @@ class GameEnvironment:
     def get_state_id(timestamp: datetime) -> int:
         return int(timestamp.strftime('%H%M%S%f')[:-2])
 
-    def step(self, action: int):
+    def step(self, action_id: int):
         """
         Takes an action in the environment and returns the next state.
         """
-        action_func = self.button_actions.get(str(action), do_nothing)
+        action_func = self.id2action[action_id]
         action_func()
         next_state = self.get_state()
         return next_state
@@ -120,6 +132,7 @@ class GameEnvironment:
         """
         Resets the environment to an initial state and returns the initial state.
         """
+
         # Close the game window
         window = self.window.get_window_with_exact_title(self.window.window_name)
         window.close()
@@ -195,7 +208,7 @@ class Run:
                     break
 
                 # Make screenshot if action from action space is done
-                action = self.environment.button_actions.get(pressed_key)
+                action = self.environment.key_button_actions.get(pressed_key)
                 if action is not None:
                     saving_timestamp = self.log_and_perform_action(action)
                 # TODO fix. this part is never executed since keyboard.read_key() is blocking
