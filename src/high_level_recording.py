@@ -2,6 +2,7 @@ import json
 import os
 import time
 from datetime import datetime
+from typing import List
 
 import keyboard
 from PIL import Image
@@ -22,7 +23,7 @@ class Run:
         self.environment = environment
 
         self.run_id = time.strftime("%Y%m%d_%H%M%S")
-        self.output_dir = f"../logs/{self.run_id}"
+        self.output_dir = f"../expert_observations/{self.run_id}"
         os.makedirs(os.path.join(self.output_dir, "screenshots"))
 
         self.action_log = {}
@@ -40,7 +41,7 @@ class Run:
         logger.debug(file_path)
         frame.save(file_path)
 
-    def capture(self):
+    def capture_by_action(self):
         """
         Control the character and capture screenshots simultaneously.
         """
@@ -95,7 +96,30 @@ class Run:
         action()
         return saving_timestamp
 
+    def capture_continuous(self, interval=0.3):
+        screenshots: List[Image.Image] = []
 
-# env = GameEnvironment()
-# run = Run(env)
-# run.capture()
+        logger.info("Press 'Space' to start recording screenshots.")
+        keyboard.wait('space')  # Wait for Space key to be pressed
+        logger.info("Recording started. Press 'Esc' to stop.")
+
+        while not keyboard.is_pressed('esc'):  # Stop when Esc is pressed
+            try:
+                screenshots.append(self.environment.get_state())
+                time.sleep(interval)
+            except Exception as e:
+                print(f"Error: {e}")
+                break
+
+        logger.info(f"Saving {len(screenshots)} screenshots")
+
+        for i, screenshot in enumerate(screenshots):
+            screenshot.save(os.path.join(self.output_dir, "screenshots", f"{i}.png"))
+        logger.info("Saved")
+
+
+env = GameEnvironment()
+run = Run(env)
+while True:
+    run.capture_continuous()
+    run.environment.reset()

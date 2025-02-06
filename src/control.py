@@ -17,6 +17,7 @@ class ControlKey(Enum):
     ESCAPE = "esc"
 
 def unhold_all():
+    logger.debug(f"Performing unhold_all")
     pydirectinput.keyUp(ControlKey.LEFT.value)
     pydirectinput.keyUp(ControlKey.RIGHT.value)
     pydirectinput.keyUp(ControlKey.DOWN.value)

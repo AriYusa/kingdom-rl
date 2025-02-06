@@ -84,6 +84,17 @@ class GameEnvironment:
         "-": do_nothing,
     }
 
+    id2action = {
+        0: run_left,
+        1: walk_left,
+        2: walk_right,
+        3: run_right,
+        4: pay,
+        5: drop_coin,
+        6: unhold_all,
+        7: do_nothing,
+    }
+
     @staticmethod
     def start_game():
         os.startfile(r"D:\Games\KingdomNewLands\Kingdom.exe")
@@ -113,11 +124,11 @@ class GameEnvironment:
     def get_state_id(timestamp: datetime) -> int:
         return int(timestamp.strftime('%H%M%S%f')[:-2])
 
-    def step(self, action: int):
+    def step(self, action_id: int):
         """
         Takes an action in the environment and returns the next state.
         """
-        action_func = self.button_actions.get(str(action), do_nothing)
+        action_func = self.id2action[action_id]
         action_func()
         time.sleep(0.1)
         next_state = self.get_state()

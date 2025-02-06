@@ -1,6 +1,5 @@
 import os
 import random
-import time
 
 import torch
 import torch.nn as nn
@@ -17,24 +16,27 @@ from src.logging_config import logger
 # Get the directory of the current script (model.py)
 script_dir = os.path.dirname(os.path.abspath(__file__))
 
-# Initialize Weights & Biases
-wandb.init(
-    project="kingdom-rl",
-    config={
+from types import SimpleNamespace
+
+model_config = {
         "lr_policy": 3e-4,
         "lr_disc": 3e-4,
         "gamma": 0.99,
         "epsilon": 0.2,
         "seq_length": 3,
-        "n_episodes": 10,
-        "episode_length": 20,
+        "n_episodes": 0,
+        "episode_length": 64,
         "policy_epochs": 4,
         "img_height": 72,
         "img_width": 128,
         "log_freq": 10,
-    }
+}
+wandb.init(
+    project="kingdom-rl",
+    config=model_config,
 )
-model_config = wandb.config
+
+model_config = SimpleNamespace(**model_config)
 
 # Set device
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -145,7 +147,6 @@ class GAIfO:
         self.disc_optimizer.step()
 
         # Log Discriminator Loss
-        wandb.log({"Discriminator Loss": disc_loss.item()})
         return disc_loss.item()
 
     def update_policy(self, states: List[torch.Tensor], actions: List[int], old_log_probs: List[float], returns: np.ndarray):
@@ -159,7 +160,6 @@ class GAIfO:
             action_logits = self.policy(states)
             dist = Categorical(logits=action_logits)
             curr_log_probs = dist.log_prob(actions)
-            logger.debug(f"prob shapes: curr_log_probs {curr_log_probs.shape}, old_log_probs {old_log_probs.shape}")
             ratios = torch.exp(curr_log_probs - old_log_probs)
             surr1 = ratios * returns
             surr2 = torch.clamp(ratios, 1 - self.epsilon, 1 + self.epsilon) * returns
@@ -168,9 +168,7 @@ class GAIfO:
             policy_loss.backward()
             self.policy_optimizer.step()
 
-        # Log Policy Loss
-        wandb.log({"Policy Loss": policy_loss.item()})
-        logger.debug(f'Policy loss {policy_loss.item()}' )
+        return policy_loss.item()
 
 def preprocess_frames(frames: List[Image]) -> torch.Tensor:
     transform = transforms.Compose([
@@ -191,8 +189,8 @@ def train_gaifo(env: GameEnvironment, agent: GAIfO):
         old_log_probs = []
 
         for i in range(model_config.episode_length):
-            logger.debug(f"STEP {i}")
             action, log_prob = agent.get_action(state)
+            logger.debug(f"STEP {i}, action {action}")
             next_frame = env.step(action)
             frame_stack.append(next_frame)
             next_state = preprocess_frames(frame_stack[-model_config.seq_length:])
@@ -216,11 +214,20 @@ def train_gaifo(env: GameEnvironment, agent: GAIfO):
         returns = agent.compute_returns(rewards)
 
         # Update the policy using PPO
-        agent.update_policy(states[:-1], actions, old_log_probs, returns)
+        policy_loss = agent.update_policy(states[:-1], actions, old_log_probs, returns)
 
         # Print the loss every 10 episodes to monitor the training progress
-        wandb.log({"Episode": episode, "Cumulative Reward": sum(rewards), "Discriminator Loss": disc_loss})
-        logger.info(f"Episode {episode}, Reward: {sum(rewards)}, Disc Loss: {disc_loss:.4f}")
+        wandb.log(
+            {
+                "Episode": episode,
+                "Cumulative Reward": sum(rewards),
+                "Discriminator Loss": disc_loss.item(),
+                "Policy Loss": policy_loss.item(),
+            }
+        )
+
+    save_model(agent.discriminator, "discriminator")
+    save_model(agent.policy, "policy")
 
 def sample_expert_states(batch_size, seq_length) -> torch.Tensor:
     """
@@ -255,10 +262,17 @@ def sample_expert_states(batch_size, seq_length) -> torch.Tensor:
     return torch.stack(batch)
 
 
-env = GameEnvironment()
+def save_model(model, model_name):
+    model_path = os.path.join(script_dir, "../models", f"{model_name}.pth")
+    torch.save(model.state_dict(), model_path)
+    print(f"Model saved & uploaded")
+
+# env = GameEnvironment()
 model = GAIfO(model_config, action_dim=8)
-time.sleep(10)
-train_gaifo(env, model)
+save_model(model.discriminator, "discriminator")
+save_model(model.policy, "policy")
+# time.sleep(10)
+# train_gaifo(env, model)
 
 # policy = Policy(input_shape=(3, model_config.img_height, model_config.img_width), action_dim=8).to(device)
 # print(policy)
