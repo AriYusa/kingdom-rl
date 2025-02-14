@@ -1,5 +1,6 @@
 import os
 import random
+import time
 
 import torch
 import torch.nn as nn
@@ -12,11 +13,10 @@ from typing import List, Tuple
 from PIL import Image
 from src.environment import GameEnvironment
 from src.logging_config import logger
+from types import SimpleNamespace
 
 # Get the directory of the current script (model.py)
 script_dir = os.path.dirname(os.path.abspath(__file__))
-
-from types import SimpleNamespace
 
 model_config = {
         "lr_policy": 3e-4,
@@ -24,7 +24,7 @@ model_config = {
         "gamma": 0.99,
         "epsilon": 0.2,
         "seq_length": 3,
-        "n_episodes": 0,
+        "n_episodes": 3,
         "episode_length": 64,
         "policy_epochs": 4,
         "img_height": 72,
@@ -114,15 +114,17 @@ class GAIfO:
         self.disc_optimizer = optim.Adam(self.discriminator.parameters(), lr=model_config.lr_disc)
         self.gamma = model_config.gamma
         self.epsilon = model_config.epsilon
-        wandb.watch(self.policy, log="all", log_freq=model_config.log_freq)
-        wandb.watch(self.discriminator, log="all", log_freq=model_config.log_freq)
+        wandb.watch(self.policy, criterion=self.policy_optimizer, log="all", log_freq=model_config.log_freq, idx=1)
+        wandb.watch(self.discriminator, criterion=self.disc_optimizer, log="all", log_freq=model_config.log_freq, idx=2)
 
-    def get_action(self, state: torch.Tensor) -> Tuple[int, float]:
+    def get_action(self, state: torch.Tensor) -> Tuple[int, float, np.ndarray]:
         state = state.unsqueeze(0).to(device)
         logits = self.policy(state)
         action_dist = Categorical(logits=logits)
+        probs = action_dist.probs.detach().cpu().numpy()
+
         action = action_dist.sample()
-        return action.item(), action_dist.log_prob(action).detach().item()
+        return action.item(), action_dist.log_prob(action).detach().item(), probs
 
     def compute_returns(self, rewards) -> np.ndarray:
         returns = []
@@ -179,19 +181,20 @@ def preprocess_frames(frames: List[Image]) -> torch.Tensor:
     processed = [transform(frame).squeeze(0) for frame in frames]
     return torch.stack(processed).to(device)
 
-def train_gaifo(env: GameEnvironment, agent: GAIfO):
+def train_gaifo(environment: GameEnvironment, agent: GAIfO):
     for episode in range(model_config.n_episodes):
         logger.debug(f"EPISODE {episode}")
-        start_frame = env.reset()
+        start_frame = environment.reset()
         frame_stack = [start_frame for _ in range(model_config.seq_length)]
         state = preprocess_frames(frame_stack)
         states, actions, rewards = [state], [], []
         old_log_probs = []
+        action_distibutions = []
 
         for i in range(model_config.episode_length):
-            action, log_prob = agent.get_action(state)
+            action, action_log_prob, action_dist = agent.get_action(state)
             logger.debug(f"STEP {i}, action {action}")
-            next_frame = env.step(action)
+            next_frame = environment.step(action)
             frame_stack.append(next_frame)
             next_state = preprocess_frames(frame_stack[-model_config.seq_length:])
             with torch.no_grad():
@@ -200,11 +203,12 @@ def train_gaifo(env: GameEnvironment, agent: GAIfO):
             states.append(next_state)
             actions.append(action)
             rewards.append(reward)
-            old_log_probs.append(log_prob)  # for PPO
+            old_log_probs.append(action_log_prob)  # for PPO
+            action_distibutions.append(action_dist)
 
             state = next_state
 
-        env.un_pause(sleep=1) # pause
+        environment.un_pause(sleep=1) # pause
 
         # After the episode is finished, we update the discriminator
         batch_expert = sample_expert_states(batch_size=model_config.episode_length, seq_length=model_config.seq_length)
@@ -216,16 +220,17 @@ def train_gaifo(env: GameEnvironment, agent: GAIfO):
         # Update the policy using PPO
         policy_loss = agent.update_policy(states[:-1], actions, old_log_probs, returns)
 
-        # Print the loss every 10 episodes to monitor the training progress
+        logger.info(np.array(action_distibutions).mean(axis=0))
         wandb.log(
             {
                 "Episode": episode,
                 "Cumulative Reward": sum(rewards),
-                "Discriminator Loss": disc_loss.item(),
-                "Policy Loss": policy_loss.item(),
+                "Discriminator Loss": disc_loss,
+                "Policy Loss": policy_loss,
+                # "Avg action distribution": wandb.Histogram(np.array(action_distibutions).mean(axis=0), num_bins=8),  # не так как я хочу
             }
         )
-
+    # save last models
     save_model(agent.discriminator, "discriminator")
     save_model(agent.policy, "policy")
 
@@ -249,7 +254,7 @@ def sample_expert_states(batch_size, seq_length) -> torch.Tensor:
     for _ in range(batch_size):
         # Randomly select an episode
         selected_episode = random.choice(all_episodes)
-        episode_path = os.path.join(expert_observations_dir, selected_episode)
+        episode_path = os.path.join(expert_observations_dir, selected_episode, 'screenshots')
 
         frame_files = sorted(os.listdir(episode_path))  # Sorting ensures timestamp order
 
@@ -267,12 +272,38 @@ def save_model(model, model_name):
     torch.save(model.state_dict(), model_path)
     print(f"Model saved & uploaded")
 
-# env = GameEnvironment()
+def capture_screen_to_video(episode_frames: List[Image], output_filename: str):
+    first_frame = episode_frames[0]
+    gif_path = os.path.join(script_dir, "../gifs", f"{output_filename}.gif")
+    first_frame.save(gif_path,
+                     save_all=True,
+                     append_images=episode_frames,
+                     duration=300,  # Duration between frames in milliseconds
+                     loop=0
+    )
+
+    wandb.log({"screen_capture": wandb.Video(gif_path)})
+
+def test_episode(environment: GameEnvironment, agent: GAIfO):
+    start_frame = environment.reset()
+    frame_stack = [start_frame for _ in range(model_config.seq_length)]
+    state = preprocess_frames(frame_stack)
+
+    for i in range(model_config.episode_length):
+        action, log_prob, _ = agent.get_action(state)
+        logger.debug(f"STEP {i}, action {action}")
+        next_frame = environment.step(action)
+        frame_stack.append(next_frame)
+        next_state = preprocess_frames(frame_stack[-model_config.seq_length:])
+        state = next_state
+
+    capture_screen_to_video(frame_stack, output_filename=f"{wandb.run.name}")
+
+env = GameEnvironment()
 model = GAIfO(model_config, action_dim=8)
-save_model(model.discriminator, "discriminator")
-save_model(model.policy, "policy")
-# time.sleep(10)
-# train_gaifo(env, model)
+time.sleep(10)
+train_gaifo(env, model)
+test_episode(env, model)
 
 # policy = Policy(input_shape=(3, model_config.img_height, model_config.img_width), action_dim=8).to(device)
 # print(policy)
