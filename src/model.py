@@ -24,7 +24,7 @@ model_config = {
         "gamma": 0.99,
         "epsilon": 0.2,
         "seq_length": 3,
-        "n_episodes": 3,
+        "n_episodes": 100,
         "episode_length": 64,
         "policy_epochs": 4,
         "img_height": 72,
@@ -141,8 +141,8 @@ class GAIfO:
         agent_preds = self.discriminator(agent_transitions)
         expert_preds = self.discriminator(expert_transitions)
 
-        disc_loss = -(torch.log(expert_preds + 1e-8).mean() +
-                      torch.log(1 - agent_preds + 1e-8).mean())
+        disc_loss = -(torch.log(agent_preds + 1e-8).mean() +
+                      torch.log(1 - expert_preds + 1e-8).mean())
 
         self.disc_optimizer.zero_grad()
         disc_loss.backward()
@@ -298,6 +298,9 @@ def test_episode(environment: GameEnvironment, agent: GAIfO):
         state = next_state
 
     capture_screen_to_video(frame_stack, output_filename=f"{wandb.run.name}")
+
+    wandb.finish()
+    environment.close_game()
 
 env = GameEnvironment()
 model = GAIfO(model_config, action_dim=8)

@@ -138,9 +138,7 @@ class GameEnvironment:
         """
         Resets the environment to an initial state and returns the initial state.
         """
-        # Close the game window
-        window = self.window.get_window_with_exact_title(self.window.window_name)
-        window.close()
+        self.close_game()
 
         # Replace the save file
         save_path = os.path.expanduser("~\\AppData\\LocalLow\\noio\\Kingdom\\storage_v34_AUTO.dat")
@@ -161,6 +159,11 @@ class GameEnvironment:
         un_pause()
         if sleep:
             time.sleep(sleep)
+
+    def close_game(self):
+        # Close the game window
+        window = self.window.get_window_with_exact_title(self.window.window_name)
+        window.close()
 
 # env = GameEnvironment()
 
