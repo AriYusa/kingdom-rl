@@ -324,14 +324,18 @@ def test_episode(environment: GameEnvironment, agent: GAIfO, is_upload: bool, sa
     state = preprocess_frames(frame_stack)
 
     for i in range(model_config.episode_length):
-        action, log_prob, _ = agent.get_action(state)
+        with torch.no_grad():
+            action, log_prob, _ = agent.get_action(state)
         logger.debug(f"STEP {i}, action {action}")
         next_frame = environment.step(action)
         frame_stack.append(next_frame)
         next_state = preprocess_frames(frame_stack[-model_config.seq_length:])
         state = next_state
 
-    capture_screen_to_video(frame_stack, output_filename=save_name, is_upload=is_upload)
+    capture_screen_to_video(frame_stack, output_filename=f"{wandb.run.name}")
+
+    wandb.finish()
+    environment.close_game()
 
 env = GameEnvironment()
 model = GAIfO(model_config, action_dim=8)
