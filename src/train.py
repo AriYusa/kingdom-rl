@@ -1,8 +1,6 @@
-from torch import get_device
-
 from src.environment import GameEnvironment
 from src.model import GAIfO, train_gaifo
-from src.utils import set_random_seed
+from src.utils import get_device, set_random_seed
 
 
 def main():
@@ -37,13 +35,13 @@ def main():
 
     # Discriminator arguments
     parser.add_argument(
-        "--disc_lr",
+        "--discr_lr",
         type=float,
         default=1e-4,
         help="Learning rate for the discriminator network",
     )
     parser.add_argument(
-        "--disc_weight_decay",
+        "--discr_weight_decay",
         type=float,
         default=0,
         help="Weight decay for the discriminator optimizer",
@@ -94,21 +92,21 @@ def main():
         if args.run_id:
             wandb.init(
                 project="kingdom-rl",
-                config=args,
+                config=vars(args),
                 id=args.run_id,
                 resume="must",
             )
         else:
             wandb.init(
                 project="kingdom-rl",
-                config=args,
+                config=vars(args),
             )
 
     set_random_seed(args.seed)
     device = get_device()
 
     env = GameEnvironment()
-    model = GAIfO(args, action_dim=8, device=device, use_wandb=args.use_wandb)
+    model = GAIfO(action_dim=len(env.id2action), device=device, args=args)
     train_gaifo(env, model, args, device)
     if args.use_wandb:
         wandb.finish()

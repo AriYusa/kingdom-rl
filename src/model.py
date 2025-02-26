@@ -50,7 +50,7 @@ class Policy(nn.Module):
         probs = action_dist.probs.detach().cpu().numpy()
 
         action = action_dist.sample()
-        return action.item(), action_dist.log_prob(action), probs
+        return action.item(), action_dist.log_prob(action).detach().item(), probs
 
 
 class Discriminator(nn.Module):
@@ -88,22 +88,22 @@ class GAIfO:
         self.policy_epochs = args.policy_epochs
 
         self.policy = Policy(
-            input_shape=(args.state_seq_length, args.img_height, args.img_width),
+            input_shape=(args.state_seq_len, args.img_height, args.img_width),
             action_dim=action_dim,
         ).to(self.device)
         self.discriminator = Discriminator(
-            input_shape=(args.state_seq_length, args.img_height, args.img_width),
+            input_shape=(args.state_seq_len, args.img_height, args.img_width),
         ).to(self.device)
 
         self.policy_optimizer = optim.Adam(
             self.policy.parameters(),
-            lr=args.lr_policy,
+            lr=args.policy_lr,
             weight_decay=args.policy_weight_decay,
         )
         self.discr_optimizer = optim.Adam(
             self.discriminator.parameters(),
-            lr=args.lr_disc,
-            weight_decay=args.disc_weight_decay,
+            lr=args.discr_lr,
+            weight_decay=args.discr_weight_decay,
         )
 
     def compute_returns(self, rewards) -> np.ndarray:
@@ -168,7 +168,7 @@ def train_gaifo(environment: GameEnvironment, agent: GAIfO, args, device):
         start_frame = environment.reset()
 
         # Initialize the frame stack with the starting frame
-        frame_stack = [start_frame for _ in range(args.state_seq_length)]
+        frame_stack = [start_frame for _ in range(args.state_seq_len)]
         state = preprocess_frames(frame_stack, args.img_height, args.img_width).to(
             device
         )
@@ -184,13 +184,15 @@ def train_gaifo(environment: GameEnvironment, agent: GAIfO, args, device):
             step_start_time = time.time()
 
             with torch.no_grad():
-                action, action_log_prob, action_dist = agent.policy.get_action(state)
+                action, action_log_prob, action_dist = agent.policy.get_action(
+                    state.unsqueeze(0)
+                )
             logger.debug(f"STEP {i}, action {action}")
             next_frame = environment.step(action)
             frame_stack.append(next_frame)
 
             next_state = preprocess_frames(
-                frame_stack[-args.state_seq_length :], args.img_height, args.img_width
+                frame_stack[-args.state_seq_len :], args.img_height, args.img_width
             ).to(device)
 
             with torch.no_grad():
@@ -215,16 +217,16 @@ def train_gaifo(environment: GameEnvironment, agent: GAIfO, args, device):
         if agent.use_wandb:
             wandb.log(
                 {
-                    "losses/Policy LR": agent.policy_optimizer.param_groups[0]["lr"],
-                    "losses/Discr LR": agent.discr_optimizer.param_groups[0]["lr"],
-                    "Episode": episode,
+                    "Policy LR": agent.policy_optimizer.param_groups[0]["lr"],
+                    "Discriminator LR": agent.discr_optimizer.param_groups[0]["lr"],
+                    "episode": episode,
                 }
             )
 
         mean_step_interval = int(np.array(step_times).mean() * 1000)
         batch_expert = sample_expert_states(
             batch_size=args.episode_len,
-            state_seq_length=args.state_seq_length,
+            state_seq_len=args.state_seq_len,
             desired_frames_interval_ms=mean_step_interval,
             img_height=args.img_height,
             img_width=args.img_width,
@@ -244,10 +246,10 @@ def train_gaifo(environment: GameEnvironment, agent: GAIfO, args, device):
             wandb.log(
                 {
                     "episode": episode,
-                    "charts/Cumulative Reward": sum(rewards),
-                    "losses/Discr Loss": disc_loss,
-                    "losses/Policy Loss": policy_loss,
-                    "charts/Mean Step Interval": mean_step_interval,
+                    "Cumulative Reward": sum(rewards),
+                    "Discriminator Loss": disc_loss,
+                    "Policy Loss": policy_loss,
+                    "Mean Step Interval": mean_step_interval,
                 }
             )
 
@@ -285,10 +287,11 @@ def test_episode(
 
     for i in range(args.episode_len):
         with torch.no_grad():
-            action, _, _ = agent.get_action(state)
+            action, _, _ = agent.policy.get_action(state.unsqueeze(0))
         logger.debug(f"STEP {i}, action {action}")
         next_frame = environment.step(action)
         frame_stack.append(next_frame)
+
         next_state = preprocess_frames(
             frame_stack[-args.state_seq_len :], args.img_height, args.img_width
         ).to(device)

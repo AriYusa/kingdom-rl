@@ -3,8 +3,8 @@ import random
 from typing import List
 
 import numpy as np
+import PIL.Image as Image
 import torch
-from PIL.Image import Image
 from torchvision.transforms import transforms
 
 import wandb
@@ -22,7 +22,7 @@ def get_device():
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-def preprocess_frames(frames: List[Image], img_height, img_width) -> torch.Tensor:
+def preprocess_frames(frames: List[Image.Image], img_height, img_width) -> torch.Tensor:
     transform = transforms.Compose(
         [
             transforms.Grayscale(),
@@ -45,8 +45,7 @@ def calculate_flatten_size(input_shape, conv_layers):
 def sample_expert_states(
     batch_size, state_seq_len, desired_frames_interval_ms, img_height, img_width
 ) -> torch.Tensor:
-    expert_observations_dir = os.path.join("expert_observations")
-    expert_observations_dir = os.path.abspath(expert_observations_dir)
+    expert_observations_dir = os.path.join("../expert_observations")
     all_episodes = os.listdir(expert_observations_dir)
     if not all_episodes:
         raise ValueError("No expert trajectories found in the specified directory.")
@@ -61,7 +60,7 @@ def sample_expert_states(
         frame_files = sorted(os.listdir(episode_path))
 
         # The interval between the frames in the expert observations,
-        # can be different than the agent interval,
+        # can be different from the agent interval,
         # therefore discriminator can exploit the difference in the intervals
         # To prevent this, sample expert observations with the same interval as agent
         if (
@@ -94,9 +93,8 @@ def sample_expert_states(
 
 
 def save_model(model, optimizer, model_name, i_episode):
-    script_dir = os.path.dirname(os.path.abspath(__file__))
     model_path = os.path.join(
-        script_dir, "../models", f"{model_name}_{wandb.run.name}_{i_episode}.pth"
+        "../models", f"{model_name}_{wandb.run.name}_{i_episode}.pth"
     )
     checkpoint = {
         "task": "recruit",
@@ -109,11 +107,10 @@ def save_model(model, optimizer, model_name, i_episode):
 
 
 def capture_screen_to_video(
-    episode_frames: List[Image], output_filename: str, is_upload: bool
+    episode_frames: List[Image.Image], output_filename: str, is_upload: bool
 ):
-    script_dir = os.path.dirname(os.path.abspath(__file__))
     first_frame = episode_frames[0]
-    gif_path = os.path.join(script_dir, "../gifs", f"{output_filename}.gif")
+    gif_path = os.path.join("../gifs", f"{output_filename}.gif")
     first_frame.save(
         gif_path, save_all=True, append_images=episode_frames, duration=300, loop=0
     )
