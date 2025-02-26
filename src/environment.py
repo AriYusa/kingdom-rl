@@ -47,7 +47,9 @@ class Window:
         # Resize and position the window
         window.resizeTo(x // 2, y // 2)  # Half of the screen
         window.moveTo(0, 0)  # Move to top-left corner
-        window.activate()
+        if not window.isActive:
+            pyautogui.press('altleft')
+            window.activate()
         time.sleep(1)  # Allow time for the window to adjust
 
         # Obtain the window's geometry
