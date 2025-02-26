@@ -26,6 +26,7 @@ name = "pytorch-gpu-src"
 url = "https://download.pytorch.org/whl/cu124"
 priority = "explicit"
 
+
 [build-system]
 requires = ["poetry-core"]
 build-backend = "poetry.core.masonry.api"

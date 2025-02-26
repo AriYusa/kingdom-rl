@@ -1,88 +1,36 @@
-import os
-import random
 import time
+from typing import List, Tuple
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.distributions import Categorical
-import numpy as np
+
 import wandb
-from torchvision.transforms import transforms
-from typing import List, Tuple
-from PIL import Image
 from src.environment import GameEnvironment
 from src.logging_config import logger
-from types import SimpleNamespace
+from src.utils import (
+    calculate_flatten_size,
+    capture_screen_to_video,
+    preprocess_frames,
+    sample_expert_states,
+    save_model,
+)
 
-# Get the directory of the current script (model.py)
-script_dir = os.path.dirname(os.path.abspath(__file__))
-
-model_config = {
-        "lr_policy": 3e-4,
-        "policy_weight_decay": 0,
-        "lr_disc": 1e-4,
-        "disc_weight_decay": 0,
-        "gamma": 0.99,
-        "epsilon": 0.2,
-        "seq_length": 3,
-        "n_episodes": 10,
-        "episode_length": 64,
-        "policy_epochs": 4,
-        "img_height": 44,
-        "img_width": 120,
-        "log_freq": 10,
-        "save_freq": 20,
-        "seed": 31,
-        "is_new_run": True,
-        "run_id": "", # only for resuming run, when is_new_run
-}
-
-model_config = SimpleNamespace(**model_config)
-
-if model_config.is_new_run:
-    wandb.init(
-        project="kingdom-rl",
-        config=model_config,
-    )
-else:
-    wandb.init(
-        project="kingdom-rl",
-        config=model_config,
-        id=model_config.run_id,
-        resume="must",
-    )
-
-
-
-# Set random seed for reproducibility
-random.seed(model_config.seed)
-np.random.seed(model_config.seed)
-torch.manual_seed(model_config.seed)
-if torch.cuda.is_available():
-    torch.cuda.manual_seed_all(model_config.seed)
-
-# Set device
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-def calculate_flatten_size(input_shape, conv_layers):
-    dummy_input = torch.zeros(1, *input_shape).to(device)
-    with torch.no_grad():
-        output = conv_layers(dummy_input)
-    return output.numel()
 
 class Policy(nn.Module):
     def __init__(self, input_shape, action_dim):
         super(Policy, self).__init__()
-        self.seq_length = input_shape[0]
+        self.state_seq_len = input_shape[0]
         self.cnn = nn.Sequential(
-            nn.Conv2d(self.seq_length, 8, kernel_size=8, stride=4),
+            nn.Conv2d(self.state_seq_len, 8, kernel_size=8, stride=4),
             nn.ReLU(),
             nn.Conv2d(8, 16, kernel_size=4, stride=2),
             nn.ReLU(),
             nn.Flatten(),
         )
-        self.flatten_size = calculate_flatten_size(input_shape, self.cnn.to(device))
+        self.flatten_size = calculate_flatten_size(input_shape, self.cnn)
         logger.info(f"Policy flatten_size: {self.flatten_size}")
 
         self.fc = nn.Sequential(
@@ -96,16 +44,23 @@ class Policy(nn.Module):
         logits = self.fc(cnn_out)
         return logits
 
+    def get_action(self, state: torch.Tensor) -> Tuple[int, float, np.ndarray]:
+        logits = self.forward(state)
+        action_dist = Categorical(logits=logits)
+        probs = action_dist.probs.detach().cpu().numpy()
+
+        action = action_dist.sample()
+        return action.item(), action_dist.log_prob(action), probs
+
 
 class Discriminator(nn.Module):
-    """For grayscale images"""
     def __init__(self, input_shape):
         super(Discriminator, self).__init__()
 
-        seq_length = input_shape[0]
+        state_seq_len = input_shape[0]
 
         self.cnn = nn.Sequential(
-            nn.Conv2d(seq_length, 8, kernel_size=5, stride=2),
+            nn.Conv2d(state_seq_len, 8, kernel_size=5, stride=2),
             nn.LeakyReLU(),
             nn.Conv2d(8, 16, kernel_size=5, stride=2),
             nn.LeakyReLU(),
@@ -113,12 +68,9 @@ class Discriminator(nn.Module):
             nn.LeakyReLU(),
             nn.Flatten(),
         )
-        self.flatten_size = calculate_flatten_size(input_shape, self.cnn.to(device))
-        logger.info(f"Discriminator flatten_size {self.flatten_size}")
-        self.fc = nn.Sequential(
-            nn.Linear(self.flatten_size, 1),
-            nn.Sigmoid()
-        )
+        self.flatten_size = calculate_flatten_size(input_shape, self.cnn)
+        logger.info(f"Discriminator flatten_size: {self.flatten_size}")
+        self.fc = nn.Sequential(nn.Linear(self.flatten_size, 1), nn.Sigmoid())
 
     def forward(self, x):
         cnn_out = self.cnn(x)
@@ -126,29 +78,33 @@ class Discriminator(nn.Module):
 
 
 class GAIfO:
-    def __init__(self, model_config, action_dim):
+    def __init__(self, action_dim, device, args):
+
+        self.use_wandb = args.use_wandb
+        self.device = device
+
+        self.gamma = args.gamma
+        self.epsilon = args.ppo_epsilon
+        self.policy_epochs = args.policy_epochs
+
         self.policy = Policy(
-            input_shape=(model_config.seq_length, model_config.img_height, model_config.img_width),
-            action_dim=action_dim
-        ).to(device)
+            input_shape=(args.state_seq_length, args.img_height, args.img_width),
+            action_dim=action_dim,
+        ).to(self.device)
         self.discriminator = Discriminator(
-            input_shape=(model_config.seq_length, model_config.img_height, model_config.img_width)
-        ).to(device)
-        self.policy_optimizer = optim.Adam(self.policy.parameters(), lr=model_config.lr_policy, weight_decay=model_config.policy_weight_decay)
-        self.disc_optimizer = optim.Adam(self.discriminator.parameters(), lr=model_config.lr_disc, weight_decay=model_config.disc_weight_decay)
-        self.gamma = model_config.gamma
-        self.epsilon = model_config.epsilon
-        wandb.watch(self.policy, criterion=self.policy_optimizer, log="all", log_freq=model_config.log_freq, idx=1)
-        wandb.watch(self.discriminator, criterion=self.disc_optimizer, log="all", log_freq=model_config.log_freq, idx=2)
+            input_shape=(args.state_seq_length, args.img_height, args.img_width),
+        ).to(self.device)
 
-    def get_action(self, state: torch.Tensor) -> Tuple[int, float, np.ndarray]:
-        state = state.unsqueeze(0).to(device)
-        logits = self.policy(state)
-        action_dist = Categorical(logits=logits)
-        probs = action_dist.probs.detach().cpu().numpy()
-
-        action = action_dist.sample()
-        return action.item(), action_dist.log_prob(action).detach().item(), probs
+        self.policy_optimizer = optim.Adam(
+            self.policy.parameters(),
+            lr=args.lr_policy,
+            weight_decay=args.policy_weight_decay,
+        )
+        self.discr_optimizer = optim.Adam(
+            self.discriminator.parameters(),
+            lr=args.lr_disc,
+            weight_decay=args.disc_weight_decay,
+        )
 
     def compute_returns(self, rewards) -> np.ndarray:
         returns = []
@@ -159,30 +115,39 @@ class GAIfO:
         returns = np.array(returns)
         return (returns - returns.mean()) / (returns.std() + 1e-8)
 
-    def update_discriminator(self, agent_transitions: torch.Tensor, expert_transitions: torch.Tensor):
-        agent_transitions = agent_transitions.float().to(device)
-        expert_transitions = expert_transitions.float().to(device)
+    def update_discriminator(
+        self, agent_transitions: torch.Tensor, expert_transitions: torch.Tensor
+    ):
+        agent_transitions = agent_transitions.float().to(self.device)
+        expert_transitions = expert_transitions.float().to(self.device)
         agent_preds = self.discriminator(agent_transitions)
         expert_preds = self.discriminator(expert_transitions)
 
-        disc_loss = -(torch.log(agent_preds + 1e-8).mean() +
-                      torch.log(1 - expert_preds + 1e-8).mean())
+        discr_loss = -(
+            torch.log(agent_preds + 1e-8).mean()
+            + torch.log(1 - expert_preds + 1e-8).mean()
+        )
 
-        self.disc_optimizer.zero_grad()
-        disc_loss.backward()
-        self.disc_optimizer.step()
+        self.discr_optimizer.zero_grad()
+        discr_loss.backward()
+        self.discr_optimizer.step()
 
-        # Log Discriminator Loss
-        return disc_loss.item()
+        return discr_loss.item()
 
-    def update_policy(self, states: List[torch.Tensor], actions: List[int], old_log_probs: List[float], returns: np.ndarray):
-        states = torch.stack(states).to(device)
-        actions = torch.IntTensor(actions).to(device)
-        old_log_probs = torch.FloatTensor(old_log_probs).to(device)
-        returns = torch.FloatTensor(returns).to(device)
+    def update_policy(
+        self,
+        states: List[torch.Tensor],
+        actions: List[int],
+        old_log_probs: List[float],
+        returns: np.ndarray,
+    ):
+        states = torch.stack(states).to(self.device)
+        actions = torch.IntTensor(actions).to(self.device)
+        old_log_probs = torch.FloatTensor(old_log_probs).to(self.device)
+        returns = torch.FloatTensor(returns).to(self.device)
 
         policy_loss = 0
-        for _ in range(model_config.policy_epochs):
+        for _ in range(self.policy_epochs):
             action_logits = self.policy(states)
             dist = Categorical(logits=action_logits)
             curr_log_probs = dist.log_prob(actions)
@@ -196,175 +161,137 @@ class GAIfO:
 
         return policy_loss.item()
 
-def preprocess_frames(frames: List[Image]) -> torch.Tensor:
-    transform = transforms.Compose([
-        transforms.Grayscale(),
-        transforms.Resize((model_config.img_height, model_config.img_width)),
-        transforms.ToTensor(),
-    ])
-    processed = [transform(frame).squeeze(0) for frame in frames]
-    return torch.stack(processed).to(device)
 
-def train_gaifo(environment: GameEnvironment, agent: GAIfO):
-    for episode in range(model_config.n_episodes):
+def train_gaifo(environment: GameEnvironment, agent: GAIfO, args, device):
+    for episode in range(args.n_episodes):
         logger.debug(f"EPISODE {episode}")
         start_frame = environment.reset()
-        frame_stack = [start_frame for _ in range(model_config.seq_length)]
-        state = preprocess_frames(frame_stack)
-        states, actions, rewards = [state], [], []
+
+        # Initialize the frame stack with the starting frame
+        frame_stack = [start_frame for _ in range(args.state_seq_length)]
+        state = preprocess_frames(frame_stack, args.img_height, args.img_width).to(
+            device
+        )
+
+        states = [state]
+        actions = []
+        rewards = []
         old_log_probs = []
         action_distibutions = []
         step_times = []
 
-        for i in range(model_config.episode_length):
+        for i in range(args.episode_len):
             step_start_time = time.time()
-            action, action_log_prob, action_dist = agent.get_action(state)
+
+            with torch.no_grad():
+                action, action_log_prob, action_dist = agent.policy.get_action(state)
             logger.debug(f"STEP {i}, action {action}")
             next_frame = environment.step(action)
             frame_stack.append(next_frame)
-            next_state = preprocess_frames(frame_stack[-model_config.seq_length:])
+
+            next_state = preprocess_frames(
+                frame_stack[-args.state_seq_length :], args.img_height, args.img_width
+            ).to(device)
+
             with torch.no_grad():
-                disc_output = agent.discriminator(next_state.unsqueeze(0))
+                disc_output = agent.discriminator(
+                    next_state.unsqueeze(0)
+                )  # unsqueeze to add batch dimension [1, state_seq_len, height, width]
                 reward = -torch.log(disc_output + 1e-8).item()
+
             states.append(next_state)
             actions.append(action)
             rewards.append(reward)
-            old_log_probs.append(action_log_prob)  # for PPO
+            old_log_probs.append(action_log_prob)
             action_distibutions.append(action_dist)
 
             state = next_state
+
             step_time = time.time() - step_start_time
             step_times.append(step_time)
 
+        environment.un_pause(sleep=1)
 
-        environment.un_pause(sleep=1) # pause
+        if agent.use_wandb:
+            wandb.log(
+                {
+                    "losses/Policy LR": agent.policy_optimizer.param_groups[0]["lr"],
+                    "losses/Discr LR": agent.discr_optimizer.param_groups[0]["lr"],
+                    "Episode": episode,
+                }
+            )
 
-        wandb.log({
-            "Policy LR": agent.policy_optimizer.param_groups[0]["lr"],
-            "Discriminator LR": agent.disc_optimizer.param_groups[0]["lr"],
-            "Episode": episode,
-        })
-        # After the episode is finished, we update the discriminator
         mean_step_interval = int(np.array(step_times).mean() * 1000)
-        batch_expert = sample_expert_states(batch_size=model_config.episode_length, seq_length=model_config.seq_length, desired_frames_interval_ms=mean_step_interval)
+        batch_expert = sample_expert_states(
+            batch_size=args.episode_len,
+            state_seq_length=args.state_seq_length,
+            desired_frames_interval_ms=mean_step_interval,
+            img_height=args.img_height,
+            img_width=args.img_width,
+        )
 
-        disc_loss = agent.update_discriminator(agent_transitions=torch.stack(states[1:]), expert_transitions=batch_expert)
+        disc_loss = agent.update_discriminator(
+            agent_transitions=torch.stack(states[1:]), expert_transitions=batch_expert
+        )
 
         #  Compute the cumulative discounted rewards for the episode
         returns = agent.compute_returns(rewards)
-
         # Update the policy using PPO
         policy_loss = agent.update_policy(states[:-1], actions, old_log_probs, returns)
 
         logger.info(np.array(action_distibutions).mean(axis=0))
-        wandb.log(
-            {
-                "Episode": episode,
-                "Cumulative Reward": sum(rewards),
-                "Discriminator Loss": disc_loss,
-                "Policy Loss": policy_loss,
-                "Mean Step Interval": mean_step_interval,
-                # "Avg action distribution": wandb.Histogram(np.array(action_distibutions).mean(axis=0), num_bins=8),  # не так как я хочу
-            }
-        )
+        if agent.use_wandb:
+            wandb.log(
+                {
+                    "episode": episode,
+                    "charts/Cumulative Reward": sum(rewards),
+                    "losses/Discr Loss": disc_loss,
+                    "losses/Policy Loss": policy_loss,
+                    "charts/Mean Step Interval": mean_step_interval,
+                }
+            )
 
-        if (episode == model_config.n_episodes - 1 # last episode
-                or episode % model_config.save_freq == 0):  # or every freq
-            # save last models
-            save_model(agent.discriminator, agent.disc_optimizer,"discriminator", episode)
-            save_model(agent.policy, agent.policy_optimizer,"policy", episode)
+        if episode == args.n_episodes - 1 or episode % args.save_freq == 0:
+            save_model(
+                agent.discriminator, agent.discr_optimizer, "discriminator", episode
+            )
+            save_model(agent.policy, agent.policy_optimizer, "policy", episode)
 
-            test_episode(environment, agent, is_upload=True, save_name=f"{wandb.run.name}_{episode}", i_episode=episode)
-
-
-def sample_expert_states(batch_size, seq_length, desired_frames_interval_ms) -> torch.Tensor:
-    """
-    Load and preprocess expert trajectories for training.
-
-    Args:
-        batch_size: Number of sequences to load in a batch.
-        seq_length: Length of each sequence of frames (e.g., 3 frames).
-        desired_frames_interval_ms: desired time interval between frames in expect observations.
-        Ideally is set the same as interval in agent observations to exclude this factor in discriminator
-    Returns:
-        A batch of preprocessed sequences as a tensor of shape (batch_size, seq_length, h, w).
-    """
-    expert_observations_dir = os.path.join(script_dir, "../expert_observations")
-    expert_observations_dir = os.path.abspath(expert_observations_dir)
-    all_episodes = os.listdir(expert_observations_dir)  # List all episodes in the directory
-    if not all_episodes:
-        raise ValueError("No expert trajectories found in the specified directory.")
-    batch = []
-    for _ in range(batch_size):
-        # Randomly select an episode
-        selected_episode = random.choice(all_episodes)
-        episode_path = os.path.join(expert_observations_dir, selected_episode, 'screenshots')
-
-        frame_files = sorted(os.listdir(episode_path))  # Sorting ensures timestamp order
-
-        if len(frame_files) < seq_length:
-            raise ValueError(f"Episode {selected_episode} has fewer frames than seq_length {seq_length}.")
-
-        if len(selected_episode.split("_")) == 3:  # meaning the expert observation supports frame frequency adjustment
-            frames_interval_ms = int(selected_episode.split("_")[0])
-            step = int(desired_frames_interval_ms / frames_interval_ms)
-        else:
-            step = 1
-
-        timeframe_len = (seq_length-1)*step + 1
-        start_idx = random.randint(0, len(frame_files) - timeframe_len)
-
-        frames = [Image.open(os.path.join(episode_path, frame_files[idx])) for idx in range(start_idx, start_idx+timeframe_len, step)]
-        preprocessed_sequence = preprocess_frames(frames)
-        batch.append(preprocessed_sequence)
-    return torch.stack(batch)
+            if args.use_wandb:
+                save_name = f"{wandb.run.name}_{episode}"
+            else:
+                save_name = f"{time.strftime("%Y%m%d_%H%M%S")}"
+            test_episode(
+                environment,
+                agent,
+                args,
+                device,
+                is_upload=agent.use_wandb,
+                save_name=save_name,
+            )
 
 
-def save_model(model,optimizer,model_name, i_episode):
-    model_path = os.path.join(script_dir, "../models", f"{model_name}_{wandb.run.name}_{i_episode}.pth")
-    checkpoint = {
-        'task': "recruit",
-        'episode': i_episode,
-        'model_state_dict': model.state_dict(),
-        'optimizer_state_dict': optimizer.state_dict(),
-    }
-    torch.save(checkpoint, model_path)
-    print(f"Model saved & uploaded")
-
-def capture_screen_to_video(episode_frames: List[Image], output_filename: str, is_upload: bool, i_episode=None):
-    first_frame = episode_frames[0]
-    gif_path = os.path.join(script_dir, "../gifs", f"{output_filename}.gif")
-    first_frame.save(gif_path,
-                     save_all=True,
-                     append_images=episode_frames,
-                     duration=300,  # Duration between frames in milliseconds
-                     loop=0
-    )
-    if is_upload:
-        if i_episode:
-            wandb.log({"screen_capture": wandb.Video(gif_path), "Episode": i_episode})
-        else:
-            wandb.log({"screen_capture": wandb.Video(gif_path)})
-
-def test_episode(environment: GameEnvironment, agent: GAIfO, is_upload: bool, save_name: str, i_episode = None):
+def test_episode(
+    environment: GameEnvironment,
+    agent: GAIfO,
+    args,
+    device,
+    is_upload: bool,
+    save_name: str,
+):
     start_frame = environment.reset()
-    frame_stack = [start_frame for _ in range(model_config.seq_length)]
-    state = preprocess_frames(frame_stack)
+    frame_stack = [start_frame for _ in range(args.state_seq_len)]
+    state = preprocess_frames(frame_stack, args.img_height, args.img_width).to(device)
 
-    for i in range(model_config.episode_length):
+    for i in range(args.episode_len):
         with torch.no_grad():
-            action, log_prob, _ = agent.get_action(state)
+            action, _, _ = agent.get_action(state)
         logger.debug(f"STEP {i}, action {action}")
         next_frame = environment.step(action)
         frame_stack.append(next_frame)
-        next_state = preprocess_frames(frame_stack[-model_config.seq_length:])
+        next_state = preprocess_frames(
+            frame_stack[-args.state_seq_len :], args.img_height, args.img_width
+        ).to(device)
         state = next_state
 
-    capture_screen_to_video(frame_stack, output_filename=save_name, is_upload=is_upload, i_episode=i_episode)
-
-env = GameEnvironment()
-model = GAIfO(model_config, action_dim=8)
-time.sleep(10)
-train_gaifo(env, model)
-wandb.finish()
-env.close_game()
+    capture_screen_to_video(frame_stack, output_filename=save_name, is_upload=is_upload)
