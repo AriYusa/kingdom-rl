@@ -30,33 +30,20 @@ model_config = {
         "img_height": 72,
         "img_width": 128,
         "log_freq": 10,
-        "save_freq": 20,
         "seed": 31,
-        "is_new_run": True,
-        "run_id": "", # only for resuming run, when is_new_run
 }
+wandb.init(
+    project="kingdom-rl",
+    config=model_config,
+)
 
 model_config = SimpleNamespace(**model_config)
-
-if model_config.is_new_run:
-    wandb.init(
-        project="kingdom-rl",
-        config=model_config,
-    )
-else:
-    wandb.init(
-        project="kingdom-rl",
-        config=model_config,
-        id=model_config.run_id,
-        resume="must",
-    )
-
-
 
 # Set random seed for reproducibility
 random.seed(model_config.seed)
 np.random.seed(model_config.seed)
 torch.manual_seed(model_config.seed)
+torch.backends.cudnn.deterministic = model_config.torch_deterministic
 if torch.cuda.is_available():
     torch.cuda.manual_seed_all(model_config.seed)
 
@@ -252,15 +239,9 @@ def train_gaifo(environment: GameEnvironment, agent: GAIfO):
                 # "Avg action distribution": wandb.Histogram(np.array(action_distibutions).mean(axis=0), num_bins=8),  # не так как я хочу
             }
         )
-
-        if (episode == model_config.n_episodes - 1 # last episode
-                or episode % model_config.save_freq == 0):  # or every freq
-            # save last models
-            save_model(agent.discriminator, agent.disc_optimizer,"discriminator", episode)
-            save_model(agent.policy, agent.policy_optimizer,"policy", episode)
-
-            test_episode(env, model, is_upload=True, save_name=f"{wandb.run.name}_{episode}")
-
+    # save last models
+    save_model(agent.discriminator, "discriminator")
+    save_model(agent.policy, "policy")
 
 def sample_expert_states(batch_size, seq_length) -> torch.Tensor:
     """
@@ -295,18 +276,12 @@ def sample_expert_states(batch_size, seq_length) -> torch.Tensor:
     return torch.stack(batch)
 
 
-def save_model(model,optimizer,model_name, i_episode):
-    model_path = os.path.join(script_dir, "../models", f"{model_name}_{wandb.run.name}_{i_episode}.pth")
-    checkpoint = {
-        'task': "recrute",
-        'episode': i_episode,
-        'model_state_dict': model.state_dict(),
-        'optimizer_state_dict': optimizer.state_dict(),
-    }
-    torch.save(checkpoint, model_path)
+def save_model(model, model_name):
+    model_path = os.path.join(script_dir, "../models", f"{model_name}.pth")
+    torch.save(model.state_dict(), model_path)
     print(f"Model saved & uploaded")
 
-def capture_screen_to_video(episode_frames: List[Image], output_filename: str, is_upload: bool):
+def capture_screen_to_video(episode_frames: List[Image], output_filename: str):
     first_frame = episode_frames[0]
     gif_path = os.path.join(script_dir, "../gifs", f"{output_filename}.gif")
     first_frame.save(gif_path,
@@ -315,31 +290,33 @@ def capture_screen_to_video(episode_frames: List[Image], output_filename: str, i
                      duration=300,  # Duration between frames in milliseconds
                      loop=0
     )
-    if is_upload:
-        wandb.log({"screen_capture": wandb.Video(gif_path)})
 
-def test_episode(environment: GameEnvironment, agent: GAIfO, is_upload: bool, save_name: str):
+    wandb.log({"screen_capture": wandb.Video(gif_path)})
+
+def test_episode(environment: GameEnvironment, agent: GAIfO):
     start_frame = environment.reset()
     frame_stack = [start_frame for _ in range(model_config.seq_length)]
     state = preprocess_frames(frame_stack)
 
     for i in range(model_config.episode_length):
-        with torch.no_grad():
-            action, log_prob, _ = agent.get_action(state)
+        action, log_prob, _ = agent.get_action(state)
         logger.debug(f"STEP {i}, action {action}")
         next_frame = environment.step(action)
         frame_stack.append(next_frame)
         next_state = preprocess_frames(frame_stack[-model_config.seq_length:])
         state = next_state
 
-    capture_screen_to_video(frame_stack, output_filename=save_name, is_upload=is_upload)
+    capture_screen_to_video(frame_stack, output_filename=f"{wandb.run.name}")
 
-# env = GameEnvironment()
-# model = GAIfO(model_config, action_dim=8)
-# time.sleep(10)
-# train_gaifo(env, model)
-# wandb.finish()
-# env.close_game()
+    wandb.finish()
+    environment.close_game()
+
+env = GameEnvironment()
+model = GAIfO(model_config, action_dim=8)
+time.sleep(10)
+train_gaifo(env, model)
+test_episode(env, model)
+
 # policy = Policy(input_shape=(3, model_config.img_height, model_config.img_width), action_dim=8).to(device)
 # print(policy)
 

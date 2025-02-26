@@ -23,7 +23,7 @@ class Run:
         self.environment = environment
 
         self.run_id = time.strftime("%Y%m%d_%H%M%S")
-        self.output_dir = f"../expert_observations/{self.run_id}"
+        self.output_dir = f"../expert_observations/{int(0.07 * 1000)}_{self.run_id}"  # TODO refactor
         os.makedirs(os.path.join(self.output_dir, "screenshots"))
 
         self.action_log = {}
@@ -96,8 +96,9 @@ class Run:
         action()
         return saving_timestamp
 
-    def capture_continuous(self, interval=0.3):
+    def capture_continuous(self, interval=0.07):
         screenshots: List[Image.Image] = []
+
 
         logger.info("Press 'Space' to start recording screenshots.")
         keyboard.wait('space')  # Wait for Space key to be pressed
@@ -120,6 +121,5 @@ class Run:
 
 env = GameEnvironment()
 run = Run(env)
-while True:
-    run.capture_continuous()
-    run.environment.reset()
+run.capture_continuous()
+env.close_game()

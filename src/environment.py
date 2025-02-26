@@ -55,12 +55,14 @@ class Window:
         logger.debug(f"Window geometry: Left={win_left}, Top={win_top}, Width={win_width}, Height={win_height}")
 
         border_width = 10
-        title_bar_height = 50
+        title_bar_height = 55
+        bottom_crop = 25
+        remove_river = 100
 
         self.inner_left = win_left + border_width
         self.inner_top = win_top + title_bar_height
         self.inner_width = win_width - 2 * border_width
-        self.inner_height = win_height - title_bar_height - border_width
+        self.inner_height = win_height - title_bar_height - border_width - bottom_crop - remove_river
 
         logger.debug(
             f"Inner content area: Left={self.inner_left},"
@@ -109,7 +111,8 @@ class GameEnvironment:
             self.window.inner_top + self.window.inner_height)
 
         cropped_image = screenshot.crop(inner_bounds)
-        image = cropped_image.resize((640, 360), Image.Resampling.LANCZOS)
+        # Image.Resampling.NEAREST - gives the cleanest edges
+        image = cropped_image.resize((470, 175), Image.Resampling.NEAREST)
         return image
 
     def get_state(self) -> Image.Image:
@@ -162,14 +165,13 @@ class GameEnvironment:
 
     def close_game(self):
         # Close the game window
+
         window = self.window.get_window_with_exact_title(self.window.window_name)
         window.close()
 
 # env = GameEnvironment()
-
 # next_frame = env.step(1)
-# print(next_frame)
-# next_frame.save("step_1.png")
+# env.close_game()
 # time.sleep(3)
 #
 # frame = env.reset()
