@@ -40,12 +40,6 @@ def main():
         default=1e-4,
         help="Learning rate for the discriminator network",
     )
-    parser.add_argument(
-        "--discr_weight_decay",
-        type=float,
-        default=0,
-        help="Weight decay for the discriminator optimizer",
-    )
 
     # Policy arguments
     parser.add_argument(
@@ -61,13 +55,59 @@ def main():
         help="Learning rate for the policy network",
     )
     parser.add_argument(
-        "--policy_weight_decay",
+        "--anneal_lr",
+        type=bool,
+        default=True,
+        help="Toggle learning rate annealing for policy and value networks",
+    )
+
+    parser.add_argument(
+        "--gae_lambda",
         type=float,
-        default=0,
-        help="Weight decay for the policy optimizer",
+        default=0.95,
+        help="the lambda for the general advantage estimation",
     )
     parser.add_argument(
-        "--ppo_epsilon", type=float, default=0.2, help="Epsilon for PPO clipping"
+        "--clip_vloss",
+        type=bool,
+        default=True,
+        help="Toggles whether or not to use a clipped loss for the value function, as per the paper.",
+    )
+    parser.add_argument(
+        "--norm_adv",
+        type=bool,
+        default=True,
+        help="Toggles advantages normalization",
+    )
+    parser.add_argument(
+        "--clip_coef",
+        type=float,
+        default=0.2,
+        help="the surrogate clipping coefficient",
+    )
+    parser.add_argument(
+        "--ent_coef",
+        type=float,
+        default=0.01,
+        help="coefficient of the entropy",
+    )
+    parser.add_argument(
+        "--vf_coef",
+        type=float,
+        default=0.5,
+        help="coefficient of the value function",
+    )
+    parser.add_argument(
+        "--max_grad_norm",
+        type=float,
+        default=0.5,
+        help="the maximum norm for the gradient clipping",
+    )
+    parser.add_argument(
+        "--target_kl",
+        type=float,
+        default=None,
+        help="Discount factor for rewards",
     )
 
     # Logging arguments

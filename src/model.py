@@ -1,5 +1,4 @@
 import time
-from typing import List, Tuple
 
 import numpy as np
 import torch
@@ -36,21 +35,27 @@ class Policy(nn.Module):
         self.fc = nn.Sequential(
             nn.Linear(self.flatten_size, 128),
             nn.ReLU(),
-            nn.Linear(128, action_dim),
         )
 
-    def forward(self, x):
-        cnn_out = self.cnn(x)
-        logits = self.fc(cnn_out)
-        return logits
+        self.policy_head = nn.Linear(128, action_dim)  # actor
+        self.value_head = nn.Linear(128, 1)  # critic
 
-    def get_action(self, state: torch.Tensor) -> Tuple[int, float, np.ndarray]:
-        logits = self.forward(state)
+    def get_action_and_value(self, state: torch.Tensor, action=None):
+        hidden = self.fc(self.cnn(state))
+        logits = self.policy_head(hidden)
         action_dist = Categorical(logits=logits)
-        probs = action_dist.probs.detach().cpu().numpy()
+        if action is None:
+            action = action_dist.sample()
+        return (
+            action,
+            action_dist.log_prob(action),
+            action_dist.entropy(),
+            self.value_head(hidden),
+        )
 
-        action = action_dist.sample()
-        return action.item(), action_dist.log_prob(action).detach().item(), probs
+    def get_value(self, state: torch.Tensor):
+        hidden = self.fc(self.cnn(state))
+        return self.value_head(hidden).item()
 
 
 class Discriminator(nn.Module):
@@ -79,13 +84,23 @@ class Discriminator(nn.Module):
 
 class GAIfO:
     def __init__(self, action_dim, device, args):
-
         self.use_wandb = args.use_wandb
         self.device = device
 
         self.gamma = args.gamma
-        self.epsilon = args.ppo_epsilon
+
+        # policy hyperparameters
         self.policy_epochs = args.policy_epochs
+        self.policy_batch_size = args.episode_len
+        self.policy_minibatch_size = self.policy_batch_size
+        self.gae_lambda = args.gae_lambda
+        self.clip_vloss = args.clip_vloss
+        self.norm_adv = args.norm_adv
+        self.clip_coef = args.clip_coef
+        self.ent_coef = args.ent_coef
+        self.vf_coef = args.vf_coef
+        self.max_grad_norm = args.max_grad_norm
+        self.target_kl = args.target_kl
 
         self.policy = Policy(
             input_shape=(args.state_seq_len, args.img_height, args.img_width),
@@ -98,25 +113,18 @@ class GAIfO:
         self.policy_optimizer = optim.Adam(
             self.policy.parameters(),
             lr=args.policy_lr,
-            weight_decay=args.policy_weight_decay,
         )
         self.discr_optimizer = optim.Adam(
             self.discriminator.parameters(),
             lr=args.discr_lr,
-            weight_decay=args.discr_weight_decay,
+            eps=1e-5,
         )
 
-    def compute_returns(self, rewards) -> np.ndarray:
-        returns = []
-        running_return = 0
-        for r in reversed(rewards):
-            running_return = r + self.gamma * running_return
-            returns.insert(0, running_return)
-        returns = np.array(returns)
-        return (returns - returns.mean()) / (returns.std() + 1e-8)
-
     def update_discriminator(
-        self, agent_transitions: torch.Tensor, expert_transitions: torch.Tensor
+        self,
+        agent_transitions: torch.Tensor,
+        expert_transitions: torch.Tensor,
+        i_episode: int,
     ):
         agent_transitions = agent_transitions.float().to(self.device)
         expert_transitions = expert_transitions.float().to(self.device)
@@ -132,68 +140,166 @@ class GAIfO:
         discr_loss.backward()
         self.discr_optimizer.step()
 
-        return discr_loss.item()
+        if self.use_wandb:
+            wandb.log(
+                {
+                    "episode": i_episode,
+                    "discriminator/loss": discr_loss,
+                }
+            )
 
     def update_policy(
         self,
-        states: List[torch.Tensor],
-        actions: List[int],
-        old_log_probs: List[float],
-        returns: np.ndarray,
+        rewards: torch.Tensor,
+        values: torch.Tensor,
+        log_probs: torch.Tensor,
+        states: torch.Tensor,
+        actions: torch.Tensor,
+        next_state: torch.Tensor,
+        i_episode: int,
     ):
-        states = torch.stack(states).to(self.device)
-        actions = torch.IntTensor(actions).to(self.device)
-        old_log_probs = torch.FloatTensor(old_log_probs).to(self.device)
-        returns = torch.FloatTensor(returns).to(self.device)
+        # bootstrap value if not done
+        with torch.no_grad():
+            episode_len = len(rewards)
+            next_value = self.policy.get_value(next_state.unsqueeze(0))
+            advantages = torch.zeros_like(rewards).to(self.device)
+            lastgaelam = 0
+            for t in reversed(range(episode_len)):
+                if t == episode_len - 1:
+                    nextvalues = next_value
+                else:
+                    nextvalues = values[t + 1]
+                delta = rewards[t] + self.gamma * nextvalues - values[t]
+                advantages[t] = lastgaelam = (
+                    delta + self.gamma * self.gae_lambda * lastgaelam
+                )
+            returns = advantages + values
 
-        policy_loss = 0
-        for _ in range(self.policy_epochs):
-            action_logits = self.policy(states)
-            dist = Categorical(logits=action_logits)
-            curr_log_probs = dist.log_prob(actions)
-            ratios = torch.exp(curr_log_probs - old_log_probs)
-            surr1 = ratios * returns
-            surr2 = torch.clamp(ratios, 1 - self.epsilon, 1 + self.epsilon) * returns
-            policy_loss = -torch.min(surr1, surr2).mean()
-            self.policy_optimizer.zero_grad()
-            policy_loss.backward()
-            self.policy_optimizer.step()
+        # Optimizing the policy and value network
+        b_inds = np.arange(self.policy_batch_size)
+        clipfracs = []
+        for epoch in range(self.policy_epochs):
+            np.random.shuffle(b_inds)
+            for start in range(0, self.policy_batch_size, self.policy_minibatch_size):
+                end = start + self.policy_minibatch_size
+                mb_inds = b_inds[start:end]
 
-        return policy_loss.item()
+                print("states[mb_inds].shape", states[mb_inds].shape)
+                print("actions.int()[mb_inds].shape", actions.int()[mb_inds].shape)
+                _, newlogprob, entropy, newvalue = self.policy.get_action_and_value(
+                    states[mb_inds], actions.int()[mb_inds]
+                )
+                print("newlogprob.shape", newlogprob.shape)
+                print("log_probs[mb_inds].shape", log_probs[mb_inds].shape)
+
+                print("entropy.shape", entropy.shape)
+                print("newvalue.shape", newvalue.shape)
+
+                logratio = newlogprob - log_probs[mb_inds]
+                ratio = logratio.exp()
+
+                with torch.no_grad():
+                    # calculate approx_kl http://joschu.net/blog/kl-approx.html
+                    old_approx_kl = (-logratio).mean()
+                    approx_kl = ((ratio - 1) - logratio).mean()
+                    clipfracs += [
+                        ((ratio - 1.0).abs() > self.clip_coef).float().mean().item()
+                    ]
+
+                mb_advantages = advantages[mb_inds]
+                if self.norm_adv:
+                    mb_advantages = (mb_advantages - mb_advantages.mean()) / (
+                        mb_advantages.std() + 1e-8
+                    )
+
+                # Policy loss
+                pg_loss1 = -mb_advantages * ratio
+                pg_loss2 = -mb_advantages * torch.clamp(
+                    ratio, 1 - self.clip_coef, 1 + self.clip_coef
+                )
+                pg_loss = torch.max(pg_loss1, pg_loss2).mean()
+
+                # Value loss
+                newvalue = newvalue.view(-1)  # что это делает?
+                if self.clip_vloss:
+                    v_loss_unclipped = (newvalue - returns[mb_inds]) ** 2
+                    v_clipped = values[mb_inds] + torch.clamp(
+                        newvalue - values[mb_inds],
+                        -self.clip_coef,
+                        self.clip_coef,
+                    )
+                    v_loss_clipped = (v_clipped - returns[mb_inds]) ** 2
+                    v_loss_max = torch.max(v_loss_unclipped, v_loss_clipped)
+                    v_loss = 0.5 * v_loss_max.mean()
+                else:
+                    v_loss = 0.5 * ((newvalue - returns[mb_inds]) ** 2).mean()
+
+                entropy_loss = entropy.mean()
+                loss = pg_loss - self.ent_coef * entropy_loss + v_loss * self.vf_coef
+
+                self.policy_optimizer.zero_grad()
+                loss.backward()
+                nn.utils.clip_grad_norm_(self.policy.parameters(), self.max_grad_norm)
+                self.policy_optimizer.step()
+
+            if self.target_kl is not None and approx_kl > self.target_kl:
+                break
+
+        y_pred, y_true = values.cpu().numpy(), returns.cpu().numpy()
+        var_y = np.var(y_true)
+        explained_var = np.nan if var_y == 0 else 1 - np.var(y_true - y_pred) / var_y
+
+        if self.use_wandb:
+            wandb.log(
+                {
+                    "policy/actor_loss": pg_loss.item(),
+                    "policy/critic_loss": v_loss.item(),
+                    "policy/entropy_loss": entropy_loss.item(),
+                    "policy/old_approx_kl": old_approx_kl.item(),
+                    "policy/approx_kl": approx_kl.item(),
+                    "policy/explained_var": explained_var,
+                    "policy/clipfrac": np.mean(clipfracs),
+                    "episode": i_episode,
+                }
+            )
 
 
 def train_gaifo(environment: GameEnvironment, agent: GAIfO, args, device):
     for episode in range(args.n_episodes):
         logger.debug(f"EPISODE {episode}")
-        start_frame = environment.reset()
+
+        # 1. Run episode to collect policy trajectory
+        states = torch.zeros(
+            (args.episode_len + 1, args.state_seq_len, args.img_height, args.img_width)
+        ).to(device)
+        actions = torch.zeros((args.episode_len,)).to(device)
+        values = torch.zeros((args.episode_len,)).to(device)
+        rewards = torch.zeros((args.episode_len,)).to(device)
+        log_probs = torch.zeros((args.episode_len,)).to(device)
 
         # Initialize the frame stack with the starting frame
-        frame_stack = [start_frame for _ in range(args.state_seq_len)]
-        state = preprocess_frames(frame_stack, args.img_height, args.img_width).to(
-            device
-        )
-
-        states = [state]
-        actions = []
-        rewards = []
-        old_log_probs = []
-        action_distibutions = []
+        start_frame = environment.reset()
+        frames = [start_frame for _ in range(args.state_seq_len)]
+        state = preprocess_frames(frames, args.img_height, args.img_width).to(device)
+        states[0] = state
         step_times = []
 
-        for i in range(args.episode_len):
+        for step in range(args.episode_len):
             step_start_time = time.time()
 
             with torch.no_grad():
-                action, action_log_prob, action_dist = agent.policy.get_action(
+                action, action_log_prob, _, value = agent.policy.get_action_and_value(
                     state.unsqueeze(0)
                 )
-            logger.debug(f"STEP {i}, action {action}")
-            next_frame = environment.step(action)
-            frame_stack.append(next_frame)
+            logger.debug(f"STEP {step}, action {action.item()}")
+            next_frame = environment.step(action.item())
+            frames.append(next_frame)
 
             next_state = preprocess_frames(
-                frame_stack[-args.state_seq_len :], args.img_height, args.img_width
-            ).to(device)
+                frames[-args.state_seq_len :], args.img_height, args.img_width
+            ).to(
+                device
+            )  # take last state_seq_len frames and stack them
 
             with torch.no_grad():
                 disc_output = agent.discriminator(
@@ -201,11 +307,11 @@ def train_gaifo(environment: GameEnvironment, agent: GAIfO, args, device):
                 )  # unsqueeze to add batch dimension [1, state_seq_len, height, width]
                 reward = -torch.log(disc_output + 1e-8).item()
 
-            states.append(next_state)
-            actions.append(action)
-            rewards.append(reward)
-            old_log_probs.append(action_log_prob)
-            action_distibutions.append(action_dist)
+            states[step + 1] = next_state
+            actions[step] = action
+            values[step] = value
+            rewards[step] = reward
+            log_probs[step] = action_log_prob
 
             state = next_state
 
@@ -213,17 +319,23 @@ def train_gaifo(environment: GameEnvironment, agent: GAIfO, args, device):
             step_times.append(step_time)
 
         environment.un_pause(sleep=1)
+        mean_step_interval = int(np.array(step_times).mean() * 1000)
 
+        # Annealing the rate if instructed to do so.
+        if args.anneal_lr:
+            frac = 1.0 - episode / (args.n_episodes + 1)
+            lrnow = frac * args.policy_lr
+            agent.policy_optimizer.param_groups[0]["lr"] = lrnow
         if agent.use_wandb:
             wandb.log(
                 {
-                    "Policy LR": agent.policy_optimizer.param_groups[0]["lr"],
-                    "Discriminator LR": agent.discr_optimizer.param_groups[0]["lr"],
+                    "policy/lr": agent.policy_optimizer.param_groups[0]["lr"],
+                    "discriminator/lr": agent.discr_optimizer.param_groups[0]["lr"],
                     "episode": episode,
                 }
             )
 
-        mean_step_interval = int(np.array(step_times).mean() * 1000)
+        # 2. Sample expert states and update discriminator
         batch_expert = sample_expert_states(
             batch_size=args.episode_len,
             state_seq_len=args.state_seq_len,
@@ -231,38 +343,39 @@ def train_gaifo(environment: GameEnvironment, agent: GAIfO, args, device):
             img_height=args.img_height,
             img_width=args.img_width,
         )
-
-        disc_loss = agent.update_discriminator(
-            agent_transitions=torch.stack(states[1:]), expert_transitions=batch_expert
+        agent.update_discriminator(
+            agent_transitions=states[1:],
+            expert_transitions=batch_expert,
+            i_episode=episode,
         )
 
-        #  Compute the cumulative discounted rewards for the episode
-        returns = agent.compute_returns(rewards)
-        # Update the policy using PPO
-        policy_loss = agent.update_policy(states[:-1], actions, old_log_probs, returns)
+        # 3. Update the policy using PPO
+        agent.update_policy(
+            rewards=rewards,
+            values=values,
+            log_probs=log_probs,
+            states=states,
+            actions=actions,
+            next_state=next_state,
+            i_episode=episode,
+        )
 
-        logger.info(np.array(action_distibutions).mean(axis=0))
-        if agent.use_wandb:
+        if args.use_wandb:
             wandb.log(
                 {
                     "episode": episode,
-                    "Cumulative Reward": sum(rewards),
-                    "Discriminator Loss": disc_loss,
-                    "Policy Loss": policy_loss,
-                    "Mean Step Interval": mean_step_interval,
+                    "cumulative reward": sum(rewards),
+                    "mean step interval": mean_step_interval,
                 }
             )
-
+            save_name = f"{wandb.run.name}_{episode}"
+        else:
+            save_name = f"{time.strftime("%Y%m%d_%H%M%S")}"
         if episode == args.n_episodes - 1 or episode % args.save_freq == 0:
             save_model(
                 agent.discriminator, agent.discr_optimizer, "discriminator", episode
             )
             save_model(agent.policy, agent.policy_optimizer, "policy", episode)
-
-            if args.use_wandb:
-                save_name = f"{wandb.run.name}_{episode}"
-            else:
-                save_name = f"{time.strftime("%Y%m%d_%H%M%S")}"
             test_episode(
                 environment,
                 agent,
@@ -285,11 +398,11 @@ def test_episode(
     frame_stack = [start_frame for _ in range(args.state_seq_len)]
     state = preprocess_frames(frame_stack, args.img_height, args.img_width).to(device)
 
-    for i in range(args.episode_len):
+    for step in range(args.episode_len):
         with torch.no_grad():
-            action, _, _ = agent.policy.get_action(state.unsqueeze(0))
-        logger.debug(f"STEP {i}, action {action}")
-        next_frame = environment.step(action)
+            action, _, _, _ = agent.policy.get_action_and_value(state.unsqueeze(0))
+        logger.debug(f"STEP {step}, action {action.item()}")
+        next_frame = environment.step(action.item())
         frame_stack.append(next_frame)
 
         next_state = preprocess_frames(
