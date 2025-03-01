@@ -321,11 +321,6 @@ def train_gaifo(environment: GameEnvironment, agent: GAIfO, args, device):
         environment.un_pause(sleep=1)
         mean_step_interval = int(np.array(step_times).mean() * 1000)
 
-        # Annealing the rate if instructed to do so.
-        if args.anneal_lr:
-            frac = 1.0 - episode / (args.n_episodes + 1)
-            lrnow = frac * args.policy_lr
-            agent.policy_optimizer.param_groups[0]["lr"] = lrnow
         if agent.use_wandb:
             wandb.log(
                 {

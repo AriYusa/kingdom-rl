@@ -9,7 +9,7 @@ def main():
     parser = argparse.ArgumentParser(description="Train GAIfO agent")
     # General arguments
     parser.add_argument(
-        "--n_episodes", type=int, default=10, help="Number of episodes to train"
+        "--n_episodes", type=int, default=50, help="Number of episodes to train"
     )
     parser.add_argument(
         "--episode_len", type=int, default=64, help="Length of each episode"
@@ -32,7 +32,12 @@ def main():
     parser.add_argument(
         "--gamma", type=float, default=0.99, help="Discount factor for rewards"
     )
-
+    parser.add_argument(
+        "--anneal_lr",
+        type=bool,
+        default=True,
+        help="Toggle learning rate annealing for policy and value networks",
+    )
     # Discriminator arguments
     parser.add_argument(
         "--discr_lr",
@@ -40,14 +45,7 @@ def main():
         default=1e-4,
         help="Learning rate for the discriminator network",
     )
-
     # Policy arguments
-    parser.add_argument(
-        "--policy_epochs",
-        type=int,
-        default=4,
-        help="Number of epochs for policy update",
-    )
     parser.add_argument(
         "--policy_lr",
         type=float,
@@ -55,12 +53,11 @@ def main():
         help="Learning rate for the policy network",
     )
     parser.add_argument(
-        "--anneal_lr",
-        type=bool,
-        default=True,
-        help="Toggle learning rate annealing for policy and value networks",
+        "--policy_epochs",
+        type=int,
+        default=4,
+        help="Number of epochs for policy update",
     )
-
     parser.add_argument(
         "--gae_lambda",
         type=float,
