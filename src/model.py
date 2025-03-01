@@ -114,10 +114,17 @@ class GAIfO:
             self.policy.parameters(),
             lr=args.policy_lr,
         )
+        self.policy_scheduler = optim.lr_scheduler.ExponentialLR(
+            self.policy_optimizer, gamma=args.policy_anneal_gamma
+        )
+
         self.discr_optimizer = optim.Adam(
             self.discriminator.parameters(),
             lr=args.discr_lr,
             eps=1e-5,
+        )
+        self.discr_scheduler = optim.lr_scheduler.ExponentialLR(
+            self.discr_optimizer, gamma=args.discr_anneal_gamma
         )
 
     def update_discriminator(
@@ -139,6 +146,8 @@ class GAIfO:
         self.discr_optimizer.zero_grad()
         discr_loss.backward()
         self.discr_optimizer.step()
+
+        self.discr_scheduler.step()
 
         if self.use_wandb:
             wandb.log(
@@ -244,6 +253,8 @@ class GAIfO:
 
             if self.target_kl is not None and approx_kl > self.target_kl:
                 break
+
+        self.policy_scheduler.step()
 
         y_pred, y_true = values.cpu().numpy(), returns.cpu().numpy()
         var_y = np.var(y_true)

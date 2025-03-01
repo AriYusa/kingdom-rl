@@ -32,12 +32,6 @@ def main():
     parser.add_argument(
         "--gamma", type=float, default=0.99, help="Discount factor for rewards"
     )
-    parser.add_argument(
-        "--anneal_lr",
-        type=bool,
-        default=True,
-        help="Toggle learning rate annealing for policy and value networks",
-    )
     # Discriminator arguments
     parser.add_argument(
         "--discr_lr",
@@ -45,12 +39,24 @@ def main():
         default=1e-4,
         help="Learning rate for the discriminator network",
     )
+    parser.add_argument(
+        "--discr_anneal_gamma",
+        type=float,
+        default=0.95,
+        help="Annealing factor for the discriminator gamma",
+    )
     # Policy arguments
     parser.add_argument(
         "--policy_lr",
         type=float,
         default=3e-4,
         help="Learning rate for the policy network",
+    )
+    parser.add_argument(
+        "--policy_anneal_gamma",
+        type=float,
+        default=0.99,
+        help="Annealing factor for the policy gamma",
     )
     parser.add_argument(
         "--policy_epochs",
