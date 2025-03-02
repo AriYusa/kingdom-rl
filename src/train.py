@@ -9,7 +9,7 @@ def main():
     parser = argparse.ArgumentParser(description="Train GAIfO agent")
     # General arguments
     parser.add_argument(
-        "--n_episodes", type=int, default=50, help="Number of episodes to train"
+        "--n_episodes", type=int, default=100, help="Number of episodes to train"
     )
     parser.add_argument(
         "--episode_len", type=int, default=64, help="Length of each episode"
@@ -42,7 +42,7 @@ def main():
     parser.add_argument(
         "--discr_anneal_gamma",
         type=float,
-        default=0.95,
+        default=0.99,
         help="Annealing factor for the discriminator gamma",
     )
     # Policy arguments
@@ -55,7 +55,7 @@ def main():
     parser.add_argument(
         "--policy_anneal_gamma",
         type=float,
-        default=0.99,
+        default=0.995,
         help="Annealing factor for the policy gamma",
     )
     parser.add_argument(

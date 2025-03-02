@@ -18,27 +18,33 @@ from src.utils import (
 )
 
 
+def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
+    torch.nn.init.orthogonal_(layer.weight, std)
+    torch.nn.init.constant_(layer.bias, bias_const)
+    return layer
+
+
 class Policy(nn.Module):
     def __init__(self, input_shape, action_dim):
         super(Policy, self).__init__()
         self.state_seq_len = input_shape[0]
         self.cnn = nn.Sequential(
-            nn.Conv2d(self.state_seq_len, 8, kernel_size=8, stride=4),
+            layer_init(nn.Conv2d(self.state_seq_len, 8, kernel_size=8, stride=4)),
             nn.ReLU(),
-            nn.Conv2d(8, 16, kernel_size=4, stride=2),
+            layer_init(nn.Conv2d(8, 16, kernel_size=4, stride=2)),
             nn.ReLU(),
-            nn.Flatten(),
+            layer_init(nn.Flatten()),
         )
         self.flatten_size = calculate_flatten_size(input_shape, self.cnn)
         logger.info(f"Policy flatten_size: {self.flatten_size}")
 
         self.fc = nn.Sequential(
-            nn.Linear(self.flatten_size, 128),
+            layer_init(nn.Linear(self.flatten_size, 128)),
             nn.ReLU(),
         )
 
-        self.policy_head = nn.Linear(128, action_dim)  # actor
-        self.value_head = nn.Linear(128, 1)  # critic
+        self.policy_head = layer_init(nn.Linear(128, action_dim), std=0.01)  # actor
+        self.value_head = layer_init(nn.Linear(128, 1), std=1)  # critic
 
     def get_action_and_value(self, state: torch.Tensor, action=None):
         hidden = self.fc(self.cnn(state))
