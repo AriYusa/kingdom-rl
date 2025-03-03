@@ -33,7 +33,7 @@ class Policy(nn.Module):
             nn.ReLU(),
             layer_init(nn.Conv2d(8, 16, kernel_size=4, stride=2)),
             nn.ReLU(),
-            layer_init(nn.Flatten()),
+            nn.Flatten(),
         )
         self.flatten_size = calculate_flatten_size(input_shape, self.cnn)
         logger.info(f"Policy flatten_size: {self.flatten_size}")
