@@ -28,6 +28,7 @@ class Policy(nn.Module):
     def __init__(self, input_shape, action_dim):
         super(Policy, self).__init__()
         self.state_seq_len = input_shape[0]
+        self.action_dim = action_dim
         self.cnn = nn.Sequential(
             layer_init(nn.Conv2d(self.state_seq_len, 8, kernel_size=8, stride=4)),
             nn.ReLU(),
@@ -43,11 +44,25 @@ class Policy(nn.Module):
             nn.ReLU(),
         )
 
-        self.policy_head = layer_init(nn.Linear(128, action_dim), std=0.01)  # actor
-        self.value_head = layer_init(nn.Linear(128, 1), std=1)  # critic
+        self.policy_head = layer_init(
+            nn.Linear(128 + self.state_seq_len * self.action_dim, action_dim), std=0.01
+        )  # actor
+        self.value_head = layer_init(
+            nn.Linear(128 + self.state_seq_len * self.action_dim, 1), std=1
+        )  # critic
 
-    def get_action_and_value(self, state: torch.Tensor, action=None):
+    def get_action_and_value(
+        self, state: torch.Tensor, action_history: torch.Tensor, action=None
+    ):
         hidden = self.fc(self.cnn(state))
+        print("hidden before", hidden.shape)
+        print(
+            "action_history.view(-1)",
+            action_history.shape,
+            action_history.view(-1).shape,
+        )
+        hidden = torch.cat((hidden, action_history.view(-1)), dim=-1)
+        print("hidden after", hidden.shape)
         logits = self.policy_head(hidden)
         action_dist = Categorical(logits=logits)
         if action is None:
@@ -59,8 +74,9 @@ class Policy(nn.Module):
             self.value_head(hidden),
         )
 
-    def get_value(self, state: torch.Tensor):
+    def get_value(self, state: torch.Tensor, action_history: torch.Tensor):
         hidden = self.fc(self.cnn(state))
+        hidden = torch.cat((hidden, action_history.view(-1)), dim=-1)
         return self.value_head(hidden).item()
 
 
@@ -198,17 +214,19 @@ class GAIfO:
             for start in range(0, self.policy_batch_size, self.policy_minibatch_size):
                 end = start + self.policy_minibatch_size
                 mb_inds = b_inds[start:end]
-
-                print("states[mb_inds].shape", states[mb_inds].shape)
-                print("actions.int()[mb_inds].shape", actions.int()[mb_inds].shape)
-                _, newlogprob, entropy, newvalue = self.policy.get_action_and_value(
-                    states[mb_inds], actions.int()[mb_inds]
+                action_slice_idx = torch.stack(
+                    (mb_inds, mb_inds + self.state_seq_len), axis=1
                 )
-                print("newlogprob.shape", newlogprob.shape)
-                print("log_probs[mb_inds].shape", log_probs[mb_inds].shape)
+                actions_histories = torch.stack(
+                    [actions[slice(idx[0], idx[1])] for idx in action_slice_idx]
+                )
 
-                print("entropy.shape", entropy.shape)
-                print("newvalue.shape", newvalue.shape)
+                print(actions_histories[0])
+                _, newlogprob, entropy, newvalue = self.policy.get_action_and_value(
+                    states[mb_inds],
+                    action_history=actions_histories,
+                    action=actions.int()[mb_inds + self.state_seq_len],
+                )
 
                 logratio = newlogprob - log_probs[mb_inds]
                 ratio = logratio.exp()
@@ -283,13 +301,16 @@ class GAIfO:
 
 def train_gaifo(environment: GameEnvironment, agent: GAIfO, args, device):
     for episode in range(args.n_episodes):
-        logger.debug(f"EPISODE {episode}")
+        logger.info(f"EPISODE {episode}")
 
         # 1. Run episode to collect policy trajectory
         states = torch.zeros(
             (args.episode_len + 1, args.state_seq_len, args.img_height, args.img_width)
         ).to(device)
-        actions = torch.zeros((args.episode_len,)).to(device)
+        actions = torch.full((args.episode_len + args.state_seq_len,), 7).to(
+            device
+        )  # Initialize previous actions with do_nothing
+        # prev_actions = torch.zeros((args.episode_len, args.state_seq_len)).to(device)
         values = torch.zeros((args.episode_len,)).to(device)
         rewards = torch.zeros((args.episode_len,)).to(device)
         log_probs = torch.zeros((args.episode_len,)).to(device)
@@ -304,11 +325,14 @@ def train_gaifo(environment: GameEnvironment, agent: GAIfO, args, device):
         for step in range(args.episode_len):
             step_start_time = time.time()
 
-            with torch.no_grad():
-                action, action_log_prob, _, value = agent.policy.get_action_and_value(
-                    state.unsqueeze(0)
-                )
-            logger.debug(f"STEP {step}, action {action.item()}")
+            print("last actions", actions[step : step + args.state_seq_len])
+            action, action_log_prob, _, value = agent.policy.get_action_and_value(
+                state.unsqueeze(0),
+                action_history=actions[step : step + args.state_seq_len].unsqueeze(
+                    0
+                ),  # take state_seq_len prev actions as history
+            )
+            logger.info(f"STEP {step}, action {action.item()}")
             next_frame = environment.step(action.item())
             frames.append(next_frame)
 
@@ -325,7 +349,7 @@ def train_gaifo(environment: GameEnvironment, agent: GAIfO, args, device):
                 reward = -torch.log(disc_output + 1e-8).item()
 
             states[step + 1] = next_state
-            actions[step] = action
+            actions[step + args.state_seq_len] = action
             values[step] = value
             rewards[step] = reward
             log_probs[step] = action_log_prob
@@ -409,11 +433,17 @@ def test_episode(
     start_frame = environment.reset()
     frame_stack = [start_frame for _ in range(args.state_seq_len)]
     state = preprocess_frames(frame_stack, args.img_height, args.img_width).to(device)
+    actions = torch.full((args.episode_len + args.state_seq_len,), 7).to(
+        device
+    )  # Initialize previous actions with do_nothing
 
     for step in range(args.episode_len):
         with torch.no_grad():
-            action, _, _, _ = agent.policy.get_action_and_value(state.unsqueeze(0))
-        logger.debug(f"STEP {step}, action {action.item()}")
+            action, _, _, _ = agent.policy.get_action_and_value(
+                state.unsqueeze(0),
+                actions[step : step + args.state_seq_len].unsqueeze(0),
+            )
+        logger.info(f"STEP {step}, action {action.item()}")
         next_frame = environment.step(action.item())
         frame_stack.append(next_frame)
 
@@ -421,5 +451,6 @@ def test_episode(
             frame_stack[-args.state_seq_len :], args.img_height, args.img_width
         ).to(device)
         state = next_state
+        action[step + args.state_seq_len] = action
 
     capture_screen_to_video(frame_stack, output_filename=save_name, is_upload=is_upload)
