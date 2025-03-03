@@ -105,6 +105,7 @@ class GameEnvironment:
         5: pay,
         6: do_nothing,
     }
+    action2id = {value: key for key, value in id2action.items()}
 
     @staticmethod
     def start_game():

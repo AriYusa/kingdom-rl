@@ -7,6 +7,7 @@ import torch.optim as optim
 from torch.distributions import Categorical
 
 import wandb
+from src.control import do_nothing
 from src.environment import GameEnvironment
 from src.logging_config import logger
 from src.utils import (
@@ -110,6 +111,7 @@ class GAIfO:
         self.device = device
 
         self.gamma = args.gamma
+        self.state_seq_len = args.state_seq_len
 
         # policy hyperparameters
         self.policy_epochs = args.policy_epochs
@@ -307,7 +309,10 @@ def train_gaifo(environment: GameEnvironment, agent: GAIfO, args, device):
         states = torch.zeros(
             (args.episode_len + 1, args.state_seq_len, args.img_height, args.img_width)
         ).to(device)
-        actions = torch.full((args.episode_len + args.state_seq_len,), 7).to(
+        actions = torch.full(
+            (args.episode_len + args.state_seq_len,),
+            fill_value=environment.action2id[do_nothing],
+        ).to(
             device
         )  # Initialize previous actions with do_nothing
         # prev_actions = torch.zeros((args.episode_len, args.state_seq_len)).to(device)
@@ -433,7 +438,10 @@ def test_episode(
     start_frame = environment.reset()
     frame_stack = [start_frame for _ in range(args.state_seq_len)]
     state = preprocess_frames(frame_stack, args.img_height, args.img_width).to(device)
-    actions = torch.full((args.episode_len + args.state_seq_len,), 7).to(
+    actions = torch.full(
+        (args.episode_len + args.state_seq_len,),
+        fill_value=environment.action2id[do_nothing],
+    ).to(
         device
     )  # Initialize previous actions with do_nothing
 
