@@ -4,6 +4,7 @@ from typing import List
 
 import keyboard
 from PIL import Image
+
 from src.environment import GameEnvironment
 from src.logging_config import logger
 
@@ -16,10 +17,10 @@ def capture_continuous(environment, interval=0.07):
     os.makedirs(os.path.join(output_dir, "screenshots"))
 
     logger.info("Press 'Space' to start recording screenshots.")
-    keyboard.wait('space')  # Wait for Space key to be pressed
+    keyboard.wait("space")  # Wait for Space key to be pressed
     logger.info("Recording started. Press 'Esc' to stop.")
 
-    while not keyboard.is_pressed('esc'):  # Stop when Esc is pressed
+    while not keyboard.is_pressed("esc"):  # Stop when Esc is pressed
         try:
             screenshots.append(environment.get_state())
             time.sleep(interval)

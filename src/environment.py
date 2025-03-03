@@ -96,30 +96,19 @@ class GameEnvironment:
         self.window = Window(window_name)
         self.window.prepare_window()
 
-    button_actions = {
-        "1": run_left,
-        "2": walk_left,
-        "3": walk_right,
-        "4": run_right,
-        "8": pay,
-        "9": drop_coin,
-        "0": unhold_all,
-        "-": do_nothing,
-    }
-
     id2action = {
         0: run_left,
         1: walk_left,
         2: walk_right,
         3: run_right,
-        4: pay,
-        5: drop_coin,
-        6: unhold_all,
-        7: do_nothing,
+        4: drop_coin,
+        5: pay,
+        6: do_nothing,
     }
 
     @staticmethod
     def start_game():
+        unhold_all()
         os.startfile(r"D:\Games\KingdomNewLands\Kingdom.exe")
         time.sleep(10)  # Allow time for the game to open
         logger.info("Start game")
@@ -191,24 +180,6 @@ class GameEnvironment:
 
     def close_game(self):
         # Close the game window
-
+        unhold_all()
         window = self.window.get_window_with_exact_title(self.window.window_name)
         window.close()
-
-
-# env = GameEnvironment()
-# next_frame = env.step(1)
-# env.close_game()
-# time.sleep(3)
-#
-# frame = env.reset()
-# print(frame)
-# frame.save("initial_state.png")
-#
-# next_frame = env.step(1)
-# print(next_frame)
-# next_frame.save("step_1.png")
-#
-# time.sleep(3)
-# next_frame = env.step(9)
-# next_frame.save("step_9.png")

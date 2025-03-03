@@ -9,75 +9,91 @@ from src.logging_config import logger
 
 SIMPLE_CLICK_DURATION = 0.05
 
+
 # TODO research more about actions in continuous-time envs
 class ControlKey(Enum):
     LEFT = "left"
     RIGHT = "right"
     DOWN = "down"
     ESCAPE = "esc"
+    SHIFT = "shift"
+
 
 def unhold_all():
-    logger.debug(f"Performing unhold_all")
+    logger.info(f"Performing unhold_all")
     pydirectinput.keyUp(ControlKey.LEFT.value)
     pydirectinput.keyUp(ControlKey.RIGHT.value)
     pydirectinput.keyUp(ControlKey.DOWN.value)
+    pydirectinput.keyUp(ControlKey.SHIFT.value)
+
 
 def walk_left():
-    logger.debug(f"Performing walk_left")
+    logger.info(f"Performing walk_left")
 
-    unhold_all()
+    pydirectinput.keyUp(ControlKey.RIGHT.value)
+    pydirectinput.keyUp(ControlKey.DOWN.value)
+    pydirectinput.keyUp(ControlKey.SHIFT.value)
 
     # perform
     pydirectinput.keyDown(ControlKey.LEFT.value)
 
-def walk_right():
-    logger.debug(f"Performing walk_right")
 
-    unhold_all()
+def walk_right():
+    logger.info(f"Performing walk_right")
+
+    pydirectinput.keyUp(ControlKey.LEFT.value)
+    pydirectinput.keyUp(ControlKey.DOWN.value)
+    pydirectinput.keyUp(ControlKey.SHIFT.value)
 
     pydirectinput.keyDown(ControlKey.RIGHT.value)
+
 
 def run_left():
-    logger.debug(f"Performing run_left")
+    logger.info(f"Performing run_left")
 
-    unhold_all()
-
-    pydirectinput.keyDown(ControlKey.LEFT.value)
-    pydirectinput.keyUp(ControlKey.LEFT.value)
-    sleep(SIMPLE_CLICK_DURATION)
+    pydirectinput.keyUp(ControlKey.RIGHT.value)
+    pydirectinput.keyUp(ControlKey.DOWN.value)
+    pydirectinput.keyUp(ControlKey.SHIFT.value)
 
     pydirectinput.keyDown(ControlKey.LEFT.value)
+    pydirectinput.keyDown(ControlKey.SHIFT.value)
+
 
 def run_right():
-    logger.debug(f"Performing run_right")
+    logger.info(f"Performing run_right")
 
-    unhold_all()
-
-    pydirectinput.keyDown(ControlKey.RIGHT.value)
-    pydirectinput.keyUp(ControlKey.RIGHT.value)
-    sleep(SIMPLE_CLICK_DURATION)
+    pydirectinput.keyUp(ControlKey.LEFT.value)
+    pydirectinput.keyUp(ControlKey.DOWN.value)
+    pydirectinput.keyUp(ControlKey.SHIFT.value)
 
     pydirectinput.keyDown(ControlKey.RIGHT.value)
+    pydirectinput.keyDown(ControlKey.SHIFT.value)
 
 
 def drop_coin():
     # drop can be done while walking/running
 
-    logger.debug(f"Performing drop_coin")
+    logger.info(f"Performing drop_coin")
     pydirectinput.keyDown(ControlKey.DOWN.value)
     pydirectinput.keyUp(ControlKey.DOWN.value)
 
 
+# in real game you could pay as you walk (not run), but for making it easier for model to pay
+# the payment will be done without movement
+# Also when running, paying works as dropping coins
 def pay():
-    logger.debug(f"Performing pay")
+    logger.info(f"Performing pay")
 
-    unhold_all()
+    pydirectinput.keyUp(ControlKey.LEFT.value)
+    pydirectinput.keyUp(ControlKey.RIGHT.value)
+    pydirectinput.keyUp(ControlKey.SHIFT.value)
 
     pydirectinput.keyDown(ControlKey.DOWN.value)
 
 
 def do_nothing():
-    logger.debug("Performing do_nothing")
+    logger.info("Performing do_nothing")
+    unhold_all()
     pass
 
 
@@ -90,11 +106,12 @@ def do_random_action():
         pay,
         drop_coin,
         unhold_all,
-        do_nothing
+        do_nothing,
     ]  # Action functions
 
     action = random.choice(actions_list)
     action()
+
 
 def un_pause():
     pydirectinput.keyDown(ControlKey.ESCAPE.value)
