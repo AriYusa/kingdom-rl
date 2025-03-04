@@ -111,7 +111,7 @@ class GAIfO:
         # policy hyperparameters
         self.policy_epochs = args.policy_epochs
         self.policy_batch_size = args.episode_len
-        self.policy_minibatch_size = self.policy_batch_size
+        self.policy_minibatch_size = args.policy_minibatch_size
         self.gae_lambda = args.gae_lambda
         self.clip_vloss = args.clip_vloss
         self.norm_adv = args.norm_adv

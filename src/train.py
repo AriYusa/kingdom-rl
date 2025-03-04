@@ -9,10 +9,10 @@ def main():
     parser = argparse.ArgumentParser(description="Train GAIfO agent")
     # General arguments
     parser.add_argument(
-        "--n_episodes", type=int, default=100, help="Number of episodes to train"
+        "--n_episodes", type=int, default=150, help="Number of episodes to train"
     )
     parser.add_argument(
-        "--episode_len", type=int, default=64, help="Length of each episode"
+        "--episode_len", type=int, default=128, help="Length of each episode"
     )
     parser.add_argument(
         "--state_seq_len",
@@ -111,6 +111,12 @@ def main():
         type=float,
         default=None,
         help="Discount factor for rewards",
+    )
+    parser.add_argument(
+        "--policy_minibatch_size",
+        type=int,
+        default=64,
+        help="Minibatch size for policy update (should be <= episode_len)",
     )
 
     # Logging arguments
