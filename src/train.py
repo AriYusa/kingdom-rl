@@ -17,7 +17,7 @@ def main():
     parser.add_argument(
         "--state_seq_len",
         type=int,
-        default=8,
+        default=4,
         help="Number of frames to be stacked to form state",
     )
     parser.add_argument(

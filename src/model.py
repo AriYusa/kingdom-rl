@@ -4,6 +4,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from sympy.stats.sampling.sample_numpy import numpy
 from torch.distributions import Categorical
 
 import wandb
@@ -46,24 +47,17 @@ class Policy(nn.Module):
         )
 
         self.policy_head = layer_init(
-            nn.Linear(128 + self.state_seq_len * self.action_dim, action_dim), std=0.01
+            nn.Linear(128 + self.state_seq_len, action_dim), std=0.01
         )  # actor
         self.value_head = layer_init(
-            nn.Linear(128 + self.state_seq_len * self.action_dim, 1), std=1
+            nn.Linear(128 + self.state_seq_len, 1), std=1
         )  # critic
 
     def get_action_and_value(
         self, state: torch.Tensor, action_history: torch.Tensor, action=None
     ):
         hidden = self.fc(self.cnn(state))
-        print("hidden before", hidden.shape)
-        print(
-            "action_history.view(-1)",
-            action_history.shape,
-            action_history.view(-1).shape,
-        )
-        hidden = torch.cat((hidden, action_history.view(-1)), dim=-1)
-        print("hidden after", hidden.shape)
+        hidden = torch.cat((hidden, action_history), dim=-1)
         logits = self.policy_head(hidden)
         action_dist = Categorical(logits=logits)
         if action is None:
@@ -77,7 +71,7 @@ class Policy(nn.Module):
 
     def get_value(self, state: torch.Tensor, action_history: torch.Tensor):
         hidden = self.fc(self.cnn(state))
-        hidden = torch.cat((hidden, action_history.view(-1)), dim=-1)
+        hidden = torch.cat((hidden, action_history), dim=-1)
         return self.value_head(hidden).item()
 
 
@@ -112,6 +106,7 @@ class GAIfO:
 
         self.gamma = args.gamma
         self.state_seq_len = args.state_seq_len
+        self.episode_len = args.episode_len
 
         # policy hyperparameters
         self.policy_epochs = args.policy_epochs
@@ -194,7 +189,13 @@ class GAIfO:
         # bootstrap value if not done
         with torch.no_grad():
             episode_len = len(rewards)
-            next_value = self.policy.get_value(next_state.unsqueeze(0))
+            action_history = actions[
+                self.episode_len : self.episode_len + self.state_seq_len
+            ].unsqueeze(0)
+            next_value = self.policy.get_value(
+                next_state.unsqueeze(0),
+                action_history=action_history,
+            )
             advantages = torch.zeros_like(rewards).to(self.device)
             lastgaelam = 0
             for t in reversed(range(episode_len)):
@@ -216,14 +217,13 @@ class GAIfO:
             for start in range(0, self.policy_batch_size, self.policy_minibatch_size):
                 end = start + self.policy_minibatch_size
                 mb_inds = b_inds[start:end]
-                action_slice_idx = torch.stack(
+                action_slice_idx = numpy.stack(
                     (mb_inds, mb_inds + self.state_seq_len), axis=1
                 )
                 actions_histories = torch.stack(
                     [actions[slice(idx[0], idx[1])] for idx in action_slice_idx]
                 )
 
-                print(actions_histories[0])
                 _, newlogprob, entropy, newvalue = self.policy.get_action_and_value(
                     states[mb_inds],
                     action_history=actions_histories,
@@ -255,7 +255,9 @@ class GAIfO:
                 pg_loss = torch.max(pg_loss1, pg_loss2).mean()
 
                 # Value loss
-                newvalue = newvalue.view(-1)  # что это делает?
+                newvalue = newvalue.view(
+                    -1
+                )  # from shape [policy_minibatch_size, 1] to [policy_minibatch_size]
                 if self.clip_vloss:
                     v_loss_unclipped = (newvalue - returns[mb_inds]) ** 2
                     v_clipped = values[mb_inds] + torch.clamp(
@@ -315,7 +317,6 @@ def train_gaifo(environment: GameEnvironment, agent: GAIfO, args, device):
         ).to(
             device
         )  # Initialize previous actions with do_nothing
-        # prev_actions = torch.zeros((args.episode_len, args.state_seq_len)).to(device)
         values = torch.zeros((args.episode_len,)).to(device)
         rewards = torch.zeros((args.episode_len,)).to(device)
         log_probs = torch.zeros((args.episode_len,)).to(device)
@@ -330,13 +331,13 @@ def train_gaifo(environment: GameEnvironment, agent: GAIfO, args, device):
         for step in range(args.episode_len):
             step_start_time = time.time()
 
-            print("last actions", actions[step : step + args.state_seq_len])
-            action, action_log_prob, _, value = agent.policy.get_action_and_value(
-                state.unsqueeze(0),
-                action_history=actions[step : step + args.state_seq_len].unsqueeze(
-                    0
-                ),  # take state_seq_len prev actions as history
-            )
+            with torch.no_grad():
+                action, action_log_prob, _, value = agent.policy.get_action_and_value(
+                    state.unsqueeze(0),
+                    action_history=actions[step : step + args.state_seq_len].unsqueeze(
+                        0
+                    ),  # take state_seq_len prev actions as history
+                )
             logger.info(f"STEP {step}, action {action.item()}")
             next_frame = environment.step(action.item())
             frames.append(next_frame)
@@ -406,6 +407,7 @@ def train_gaifo(environment: GameEnvironment, agent: GAIfO, args, device):
                 {
                     "episode": episode,
                     "cumulative reward": sum(rewards),
+                    "mean step reward": rewards.mean(),
                     "mean step interval": mean_step_interval,
                 }
             )
@@ -459,6 +461,6 @@ def test_episode(
             frame_stack[-args.state_seq_len :], args.img_height, args.img_width
         ).to(device)
         state = next_state
-        action[step + args.state_seq_len] = action
+        actions[step + args.state_seq_len] = action
 
     capture_screen_to_video(frame_stack, output_filename=save_name, is_upload=is_upload)
