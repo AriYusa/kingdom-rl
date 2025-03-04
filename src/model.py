@@ -53,11 +53,15 @@ class Policy(nn.Module):
             nn.Linear(128 + self.state_seq_len, 1), std=1
         )  # critic
 
+    def cat_obs_actions(self, obs_emb, action_history):
+        # action_history/self.action_dim to normalize
+        return torch.cat((obs_emb, action_history / self.action_dim), dim=-1)
+
     def get_action_and_value(
         self, state: torch.Tensor, action_history: torch.Tensor, action=None
     ):
         hidden = self.fc(self.cnn(state))
-        hidden = torch.cat((hidden, action_history), dim=-1)
+        hidden = self.cat_obs_actions(hidden, action_history)
         logits = self.policy_head(hidden)
         action_dist = Categorical(logits=logits)
         if action is None:
@@ -71,7 +75,7 @@ class Policy(nn.Module):
 
     def get_value(self, state: torch.Tensor, action_history: torch.Tensor):
         hidden = self.fc(self.cnn(state))
-        hidden = torch.cat((hidden, action_history), dim=-1)
+        hidden = self.cat_obs_actions(hidden, action_history)
         return self.value_head(hidden).item()
 
 
