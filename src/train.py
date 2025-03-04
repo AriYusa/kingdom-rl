@@ -17,7 +17,7 @@ def main():
     parser.add_argument(
         "--state_seq_len",
         type=int,
-        default=4,
+        default=8,
         help="Number of frames to be stacked to form state",
     )
     parser.add_argument(
@@ -91,7 +91,7 @@ def main():
     parser.add_argument(
         "--ent_coef",
         type=float,
-        default=0.01,
+        default=0.05,
         help="coefficient of the entropy",
     )
     parser.add_argument(
